@@ -9,7 +9,7 @@ APP_ID = 1089  # Default Deriv app id for general use
 class DerivBot:
     def __init__(self, token):
         self.token = token
-        self.api_url = f"wss://re.derivws.com/websockets/v3?app_id={APP_ID}"
+        self.api_url = f"wss://ws.binaryws.com/websockets/v3?app_id={APP_ID}"
 
     async def place_order(self, symbol, side, price, sl, tp, amount=1):
         """
