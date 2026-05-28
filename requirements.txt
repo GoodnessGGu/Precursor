@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+websockets
+tensorflow-cpu
+pandas
+numpy
+yfinance
+ta
+fredapi
+python-multipart
+gunicorn
