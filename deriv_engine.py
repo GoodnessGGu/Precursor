@@ -58,6 +58,25 @@ class DerivBot:
             print(f"Order Response: {order_res}")
             return json.loads(order_res)
 
+    async def get_account_info(self):
+        """Fetches current balance and account type"""
+        async with websockets.connect(self.api_url) as websocket:
+            await websocket.send(json.dumps({"authorize": self.token}))
+            auth_res = await websocket.recv()
+            data = json.loads(auth_res)
+            
+            if "error" in data:
+                return {"error": data['error']['message']}
+            
+            auth = data.get("authorize", {})
+            return {
+                "email": auth.get("email"),
+                "currency": auth.get("currency"),
+                "balance": auth.get("balance"),
+                "is_virtual": auth.get("is_virtual"),
+                "loginid": auth.get("loginid")
+            }
+
 async def test_engine():
     bot = DerivBot(DERIV_TOKEN)
     # Placeholder values for testing

@@ -73,6 +73,12 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
     background_tasks.add_task(process_trade, payload)
     return {"status": "received"}
 
+@app.get("/account")
+async def account_info():
+    """Returns real-time balance and account details"""
+    info = await deriv_client.get_account_info()
+    return info
+
 @app.get("/")
 def health():
     return {"status": "online", "model": "Gushtec Gold v2"}
