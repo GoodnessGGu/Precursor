@@ -4,7 +4,7 @@ import websockets
 import os
 
 DERIV_TOKEN = os.getenv('DERIV_TOKEN')
-APP_ID = 31063  # Use the official Deriv API Explorer ID for better compatibility
+APP_ID = 1089  # Reverting to default stable ID
 
 class DerivBot:
     def __init__(self, token):
