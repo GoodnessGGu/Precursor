@@ -61,12 +61,14 @@ class DerivBot:
     async def get_account_info(self):
         """Fetches current balance and account type"""
         async with websockets.connect(self.api_url) as websocket:
+            print(f"Connecting to Deriv with token: {self.token[:10]}...")
             await websocket.send(json.dumps({"authorize": self.token}))
             auth_res = await websocket.recv()
+            print(f"Raw Auth Response: {auth_res}")
             data = json.loads(auth_res)
             
             if "error" in data:
-                return {"error": data['error']['message']}
+                return {"error": data['error']['message'], "details": data['error']}
             
             auth = data.get("authorize", {})
             return {
