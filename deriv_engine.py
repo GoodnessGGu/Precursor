@@ -3,7 +3,7 @@ import json
 import websockets
 import os
 
-DERIV_TOKEN = os.getenv('DERIV_TOKEN')
+DERIV_TOKEN = os.getenv('DERIV_TOKEN', '').strip()
 APP_ID = 1089  # Reverting to default stable ID
 
 class DerivBot:
