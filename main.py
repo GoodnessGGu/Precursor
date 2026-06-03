@@ -9,44 +9,30 @@ from ta.momentum import RSIIndicator
 from ta.volatility import AverageTrueRange
 from datetime import datetime, timedelta
 from deriv_engine import DerivBot
+from bybit_engine import BybitBot
 import pandas as pd
 
 app = FastAPI()
 
-# --- Load AI System ---
-MODEL_PATH = os.path.join('models', 'fvg_ai_filter_v2.h5')
-SCALER_MEAN = np.load(os.path.join('models', 'scaler_mean_v2.npy'))
-SCALER_SCALE = np.load(os.path.join('models', 'scaler_scale_v2.npy'))
-model = keras.models.load_model(MODEL_PATH)
-
+# --- Load Config & Engines ---
 FRED_API_KEY = os.getenv('FRED_API_KEY', '6fde9aa3f283e43086ae4423e7769e37')
 DERIV_TOKEN = os.getenv('DERIV_TOKEN')
-deriv_client = DerivBot(DERIV_TOKEN)
+BYBIT_KEY = os.getenv('BYBIT_API_KEY')
+BYBIT_SECRET = os.getenv('BYBIT_API_SECRET')
 
-def get_market_context():
-    """Fetches macro and technical data for AI Brain"""
-    fred = Fred(api_key=FRED_API_KEY)
-    
-    # Macro
-    rates = fred.get_series('FEDFUNDS', observation_start=datetime.now() - timedelta(days=60)).iloc[-1]
-    dxy = fred.get_series('DTWEXBGS', observation_start=datetime.now() - timedelta(days=60)).iloc[-1]
-    cpi = fred.get_series('CPIAUCSL', observation_start=datetime.now() - timedelta(days=60)).iloc[-1]
-    
-    # Technical (GLD proxy)
-    data = yf.download('GLD', period='5d', interval='15m', progress=False)
-    if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
-    rsi = RSIIndicator(close=data['Close'], window=14).rsi().iloc[-1]
-    atr = AverageTrueRange(high=data['High'], low=data['Low'], close=data['Close'], window=14).average_true_range().iloc[-1]
-    
-    return {'CPI': cpi, 'Rates': rates, 'DXY': dxy, 'RSI': rsi, 'ATR': atr}
+deriv_client = DerivBot(DERIV_TOKEN)
+bybit_client = BybitBot(BYBIT_KEY, BYBIT_SECRET) if BYBIT_KEY else None
+
+# ... (keep AI model loading and context fetching same) ...
 
 async def process_trade(signal_data):
     """The brain of the execution"""
     side_str = signal_data.get('action') # 'long' or 'short'
-    symbol = signal_data.get('symbol', 'frxXAUUSD')
+    symbol = signal_data.get('symbol', 'BTCUSDT')
     price = float(signal_data.get('price', 0))
     sl = float(signal_data.get('sl', 0))
     tp = float(signal_data.get('tp', 0))
+    qty = float(signal_data.get('qty', 0.001)) # Default to min Bybit size
 
     # 1. AI Probability Filter
     ctx = get_market_context()
@@ -60,10 +46,19 @@ async def process_trade(signal_data):
 
     # 2. Execution Decision
     if (side == 1 and score > 55) or (side == 0 and score < 45):
-        print(f"✅ AI APPROVED - Sending order to Deriv...")
-        await deriv_client.place_order(symbol, side_str, price, sl, tp)
+        print(f"✅ AI APPROVED - Executing Trade...")
+        # Priority: Bybit -> Deriv
+        if bybit_client:
+            bybit_client.place_order(symbol, side_str, qty, sl, tp)
+        else:
+            await deriv_client.place_order(symbol, side_str, price, sl, tp)
     else:
         print(f"❌ AI BLOCKED - Trade rejected due to low probability.")
+
+@app.get("/bybit-account")
+def bybit_info():
+    if not bybit_client: return {"error": "Bybit not configured"}
+    return {"balance": bybit_client.get_balance(), "coin": "USDT"}
 
 @app.post("/webhook")
 async def webhook(request: Request, background_tasks: BackgroundTasks):
