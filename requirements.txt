@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 websockets
-tensorflow
+tensorflow-cpu
 pandas
 numpy
 yfinance
@@ -9,3 +9,5 @@ ta
 fredapi
 python-multipart
 gunicorn
+python-dotenv
+requests

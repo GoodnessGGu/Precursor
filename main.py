@@ -8,31 +8,54 @@ import yfinance as yf
 from ta.momentum import RSIIndicator
 from ta.volatility import AverageTrueRange
 from datetime import datetime, timedelta
-from deriv_engine import DerivBot
-from bybit_engine import BybitBot
 import pandas as pd
+from dotenv import load_dotenv
+from ctrader_engine import CTraderBot
+
+# Load local .env file
+load_dotenv()
 
 app = FastAPI()
 
-# --- Load Config & Engines ---
+# --- Configuration ---
+EXECUTION_MODE = os.getenv('EXECUTION_MODE', 'MT5').upper()
 FRED_API_KEY = os.getenv('FRED_API_KEY', '6fde9aa3f283e43086ae4423e7769e37')
-DERIV_TOKEN = os.getenv('DERIV_TOKEN')
-BYBIT_KEY = os.getenv('BYBIT_API_KEY')
-BYBIT_SECRET = os.getenv('BYBIT_API_SECRET')
+# Path where MT5 can read files (Specific Terminal Instance)
+MT5_SIGNAL_PATH = r"C:\Users\GushEx\AppData\Roaming\MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075\MQL5\Files\signals"
 
-deriv_client = DerivBot(DERIV_TOKEN)
-bybit_client = BybitBot(BYBIT_KEY, BYBIT_SECRET) if BYBIT_KEY else None
+# --- Load AI System ---
+MODEL_PATH = os.path.join('models', 'fvg_ai_filter_v2.h5')
+SCALER_MEAN = np.load(os.path.join('models', 'scaler_mean_v2.npy'))
+SCALER_SCALE = np.load(os.path.join('models', 'scaler_scale_v2.npy'))
+model = keras.models.load_model(MODEL_PATH)
 
-# ... (keep AI model loading and context fetching same) ...
+# Initialize cTrader if needed
+ctrader = None
+if EXECUTION_MODE == 'CTRADER':
+    ctrader = CTraderBot()
+
+def get_market_context():
+    """Fetches macro and technical data for AI Brain"""
+    fred = Fred(api_key=FRED_API_KEY)
+    rates = fred.get_series('FEDFUNDS', observation_start=datetime.now() - timedelta(days=60)).iloc[-1]
+    dxy = fred.get_series('DTWEXBGS', observation_start=datetime.now() - timedelta(days=60)).iloc[-1]
+    cpi = fred.get_series('CPIAUCSL', observation_start=datetime.now() - timedelta(days=60)).iloc[-1]
+    
+    data = yf.download('GLD', period='5d', interval='15m', progress=False)
+    if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
+    rsi = RSIIndicator(close=data['Close'], window=14).rsi().iloc[-1]
+    atr = AverageTrueRange(high=data['High'], low=data['Low'], close=data['Close'], window=14).average_true_range().iloc[-1]
+    
+    return {'CPI': cpi, 'Rates': rates, 'DXY': dxy, 'RSI': rsi, 'ATR': atr}
 
 async def process_trade(signal_data):
-    """The brain of the execution"""
-    side_str = signal_data.get('action') # 'long' or 'short'
-    symbol = signal_data.get('symbol', 'BTCUSDT')
+    """The brain of the execution - Supports MT5 and cTrader"""
+    side_str = signal_data.get('action') 
+    symbol = signal_data.get('symbol', 'XAUUSD')
     price = float(signal_data.get('price', 0))
     sl = float(signal_data.get('sl', 0))
     tp = float(signal_data.get('tp', 0))
-    qty = float(signal_data.get('qty', 0.001)) # Default to min Bybit size
+    qty = float(signal_data.get('qty', 0.01)) 
 
     # 1. AI Probability Filter
     ctx = get_market_context()
@@ -46,34 +69,42 @@ async def process_trade(signal_data):
 
     # 2. Execution Decision
     if (side == 1 and score > 55) or (side == 0 and score < 45):
-        print(f"✅ AI APPROVED - Executing Trade...")
-        # Priority: Bybit -> Deriv
-        if bybit_client:
-            bybit_client.place_order(symbol, side_str, qty, sl, tp)
+        print(f"✅ AI APPROVED - Mode: {EXECUTION_MODE}")
+        
+        if EXECUTION_MODE == 'CTRADER' and ctrader:
+            # Direct cTrader Execution
+            result = await ctrader.place_order(symbol, side_str, qty, sl_price=sl, tp_price=tp)
+            print(f"cTrader Result: {result}")
+            
         else:
-            await deriv_client.place_order(symbol, side_str, price, sl, tp)
+            # Fallback to MT5 File Bridge
+            signal_file = os.path.join(MT5_SIGNAL_PATH, f"signal_{int(datetime.now().timestamp())}.json")
+            payload = {
+                "symbol": symbol,
+                "side": side_str.upper(),
+                "price": price,
+                "sl": sl,
+                "tp": tp,
+                "qty": qty
+            }
+            with open(signal_file, 'w') as f:
+                json.dump(payload, f)
+            print(f"Signal saved to MT5 Bridge: {signal_file}")
     else:
         print(f"❌ AI BLOCKED - Trade rejected due to low probability.")
 
-@app.get("/bybit-account")
-def bybit_info():
-    if not bybit_client: return {"error": "Bybit not configured"}
-    return {"balance": bybit_client.get_balance(), "coin": "USDT"}
-
 @app.post("/webhook")
 async def webhook(request: Request, background_tasks: BackgroundTasks):
-    """Entry point for TradingView alerts"""
     payload = await request.json()
-    print(f"Received Webhook: {payload}")
+    print(f"Received Signal: {payload}")
     background_tasks.add_task(process_trade, payload)
     return {"status": "received"}
 
-@app.get("/account")
-async def account_info():
-    """Returns real-time balance and account details"""
-    info = await deriv_client.get_account_info()
-    return info
-
 @app.get("/")
 def health():
-    return {"status": "online", "model": "Gushtec Gold v2"}
+    return {"status": "online", "mode": EXECUTION_MODE}
+
+if __name__ == "__main__":
+    # Railway sets the 'PORT' environment variable automatically.
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)

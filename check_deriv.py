@@ -2,11 +2,16 @@ import asyncio
 import websockets
 import json
 import os
+from dotenv import load_dotenv
 
-DERIV_TOKEN = "6U2R0Y3B38J8X3Q"
+load_dotenv()
+
+DERIV_TOKEN = os.getenv("DERIV_TOKEN")
+DERIV_APP_ID = os.getenv("DERIV_APP_ID", "1")
 
 async def check_account():
-    api_url = "wss://re.derivws.com/websockets/v3?app_id=1089"
+    api_url = f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}"
+    print(f"Testing token: {DERIV_TOKEN[:10]}... on {api_url}")
     try:
         async with websockets.connect(api_url) as ws:
             await ws.send(json.dumps({"authorize": DERIV_TOKEN}))
@@ -14,15 +19,14 @@ async def check_account():
             data = json.loads(res)
             
             if "error" in data:
-                print(f"Error: {data['error']['message']}")
+                print(f"Error: {data['error']['message']} (Code: {data['error']['code']})")
                 return
 
             auth = data.get("authorize", {})
+            print("--- SUCCESS ---")
             print(f"Account: {auth.get('email')}")
-            print(f"Currency: {auth.get('currency')}")
+            print(f"Balance: {auth.get('balance')} {auth.get('currency')}")
             print(f"Is Virtual: {auth.get('is_virtual')}")
-            print(f"Balance: {auth.get('balance')}")
-            print(f"Login ID: {auth.get('loginid')}")
 
     except Exception as e:
         print(f"Connection Error: {e}")
