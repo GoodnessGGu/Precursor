@@ -12,6 +12,7 @@ import pandas as pd
 from dotenv import load_dotenv
 from ctrader_engine import CTraderBot
 
+import asyncio
 from contextlib import asynccontextmanager
 from strategy_monitor import monitor_market
 
