@@ -12,10 +12,20 @@ import pandas as pd
 from dotenv import load_dotenv
 from ctrader_engine import CTraderBot
 
-# Load local .env file
-load_dotenv()
+from contextlib import asynccontextmanager
+from strategy_monitor import monitor_market
 
-app = FastAPI()
+# Initialize cTrader (Single instance)
+ctrader = CTraderBot()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Start Standalone Monitor
+    print(f"🌍 Starting STANDALONE CLOUD MODE (Execution: {EXECUTION_MODE})")
+    asyncio.create_task(monitor_market(process_trade))
+    yield
+
+app = FastAPI(lifespan=lifespan)
 
 # --- Configuration ---
 EXECUTION_MODE = os.getenv('EXECUTION_MODE', 'MT5').upper()
@@ -28,11 +38,6 @@ MODEL_PATH = os.path.join('models', 'fvg_ai_filter_v2.h5')
 SCALER_MEAN = np.load(os.path.join('models', 'scaler_mean_v2.npy'))
 SCALER_SCALE = np.load(os.path.join('models', 'scaler_scale_v2.npy'))
 model = keras.models.load_model(MODEL_PATH)
-
-# Initialize cTrader if needed
-ctrader = None
-if EXECUTION_MODE == 'CTRADER':
-    ctrader = CTraderBot()
 
 def get_market_context():
     """Fetches macro and technical data for AI Brain"""
