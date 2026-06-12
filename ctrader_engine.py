@@ -76,10 +76,11 @@ class CTraderBot:
         while self.ws:
             try:
                 if not self.ws.open: break
-                await asyncio.sleep(20)
-                ping = {"payloadType": 2104, "payload": {}} # ProtoOAHeartbeatEvent
+                await asyncio.sleep(15) # Faster ping for cloud stability
+                ping = {"payloadType": 2104, "payload": {}} 
                 await self.ws.send(json.dumps(ping))
-            except:
+            except Exception as e:
+                print(f"Heartbeat Error: {e}")
                 break
 
     async def get_account_info(self):
@@ -106,17 +107,23 @@ class CTraderBot:
             return {"error": str(e)}
 
     async def get_symbol_id(self, symbol_name):
-        """Fetches the internal numeric ID for a symbol name (e.g. XAUUSD)"""
+        """Fetches the internal numeric ID for a symbol name"""
         if not self.is_authenticated:
             success, err = await self.connect()
             if not success: return None
         
+        # Mapping for common assets to avoid discovery failures
+        # BTC is 31, XAU is 17, USD is 15
+        f_id, l_id = (17, 15) 
+        if "BTC" in symbol_name.upper():
+            f_id, l_id = (31, 15)
+        
         req = {
-            "payloadType": 2118, # ProtoOASymbolsForConversionReq
+            "payloadType": 2118, 
             "payload": {
                 "ctidTraderAccountId": int(self.account_id),
-                "firstAssetId": 17, 
-                "lastAssetId": 15
+                "firstAssetId": f_id, 
+                "lastAssetId": l_id
             }
         }
         await self.ws.send(json.dumps(req))
@@ -125,22 +132,7 @@ class CTraderBot:
         
         symbols = data.get('payload', {}).get('symbol', [])
         for s in symbols:
-            if s.get('symbolName') == symbol_name:
-                return s.get('symbolId')
-        
-        req_name = {
-            "payloadType": 2117, # ProtoOASymbolByNameReq
-            "payload": {
-                "ctidTraderAccountId": int(self.account_id),
-                "symbolName": symbol_name
-            }
-        }
-        await self.ws.send(json.dumps(req_name))
-        res = await self.ws.recv()
-        data = json.loads(res)
-        symbols = data.get('payload', {}).get('symbol', [])
-        for s in symbols:
-            if s.get('symbolName') == symbol_name:
+            if s.get('symbolName').upper() == symbol_name.upper():
                 return s.get('symbolId')
                 
         return None
@@ -173,10 +165,10 @@ class CTraderBot:
         if sl_price: order_req['payload']['stopLoss'] = float(sl_price)
         if tp_price: order_req['payload']['takeProfit'] = float(tp_price)
 
-        print(f"Sending cTrader Order: {qty} Lots of {symbol}...")
+        print(f"Sending cTrader Order: {qty} Lots of {symbol} (ID: {symbol_id})...")
         await self.ws.send(json.dumps(order_req))
         
-        # Listen for the execution result (usually 2126)
+        # Listen for the execution result
         for _ in range(5):
             res = await self.ws.recv()
             data = json.loads(res)
@@ -193,4 +185,4 @@ class CTraderBot:
             if pt == 2142: # ERROR
                 return {"error": f"cTrader Error: {data.get('payload', {}).get('description')}"}
 
-        return {"error": f"Order sent but no confirmation received. Last msg: {res}"}
+        return {"error": f"Order sent but no confirmation received."}

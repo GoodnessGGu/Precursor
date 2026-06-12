@@ -58,16 +58,16 @@ class HybridStrategy:
         return None
 
 async def monitor_market(callback):
-    """Background loop for BTC 1m (Free Tier)"""
-    print("🚀 Starting BTC 1m Monitor ($100 Budget Mode)")
-    strat = HybridStrategy()
+    """Background loop for BTC 5m (Optimized Cloud Mode)"""
+    print("🚀 Starting BTC 5m Monitor ($100 Budget Mode - Optimized)")
+    strat = HybridStrategy(rr_ratio=3.0)
     
     while True:
         try:
-            # Fetch Bitcoin Data (1m timeframe)
-            data = yf.download("BTC-USD", period="1d", interval="1m", progress=False)
+            # Fetch Bitcoin Data (5m timeframe)
+            data = yf.download("BTC-USD", period="1d", interval="5m", progress=False)
             if data.empty:
-                await asyncio.sleep(10)
+                await asyncio.sleep(60)
                 continue
             
             if isinstance(data.columns, pd.MultiIndex):
@@ -78,8 +78,8 @@ async def monitor_market(callback):
                 print(f"🎯 BTC SIGNAL: {signal['action'].upper()} @ {signal['price']}")
                 await callback(signal)
 
-            # Check every 30 seconds for 1m candle updates
-            await asyncio.sleep(30)
+            # Check every 60 seconds for 5m candle updates
+            await asyncio.sleep(60)
             
         except Exception as e:
             print(f"❌ Monitor Error: {e}")
