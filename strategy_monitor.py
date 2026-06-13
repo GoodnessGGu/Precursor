@@ -57,8 +57,12 @@ class HybridStrategy:
 
         return None
 
+# Global sync variable
+LAST_CANDLE_TIME = "Initializing..."
+
 async def monitor_market(callback):
     """Background loop for BTC 5m (Optimized Cloud Mode - +5,584% Config)"""
+    global LAST_CANDLE_TIME
     print("🚀 Starting BTC 5m Monitor ($100 Budget Edition - Optimized)")
     # Updating to 1:1 RR as per the successful $5k+ backtest config
     strat = HybridStrategy(fvg_threshold=0.0, rr_ratio=1.0)
@@ -73,6 +77,10 @@ async def monitor_market(callback):
             
             if isinstance(data.columns, pd.MultiIndex):
                 data.columns = data.columns.get_level_values(0)
+
+            # Update Sync Time
+            last_ts = data.index[-1]
+            LAST_CANDLE_TIME = last_ts.strftime('%Y-%m-%d %H:%M')
 
             signal = strat.scan_for_signals(data)
             if signal:

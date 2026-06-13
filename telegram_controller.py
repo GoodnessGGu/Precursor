@@ -2,7 +2,9 @@ from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboard
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, CallbackQueryHandler, filters
 import os
 import json
+import asyncio
 from dotenv import load_dotenv
+from strategy_monitor import LAST_CANDLE_TIME
 
 load_dotenv()
 
@@ -27,6 +29,9 @@ class TelegramController:
     async def get_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         mode = os.getenv("EXECUTION_MODE", "MT5")
         ai_filter = os.getenv("USE_AI_FILTER", "False")
+        
+        # Import dynamic sync time
+        from strategy_monitor import LAST_CANDLE_TIME
         
         balance_str = "Fetching..."
         pnl_str = "$0.00"
@@ -53,6 +58,7 @@ class TelegramController:
             f"🔹 *AI Filter:* {ai_filter}\n"
             f"🔹 *Asset:* BTCUSD\n"
             f"🔹 *Timeframe:* 5m\n"
+            f"🔄 *Last Sync:* `{LAST_CANDLE_TIME}`\n"
             f"━━━━━━━━━━━━━━━",
             parse_mode='Markdown'
         )
