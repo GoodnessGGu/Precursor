@@ -15,7 +15,7 @@ from notifier import TelegramNotifier
 
 import asyncio
 from contextlib import asynccontextmanager
-from strategy_monitor import monitor_market
+from strategy_monitor import monitor_market_v2
 
 from telegram_controller import TelegramController
 
@@ -32,10 +32,7 @@ async def news_check_task():
     """Background task to monitor news and auto-pause the bot"""
     while True:
         try:
-            # 1. Fetch latest events
             calendar.fetch_events()
-            
-            # 2. Check if we should be paused (15 min window)
             is_active, event_title = calendar.is_news_active(buffer_before=15, buffer_after=15)
             
             if is_active and not config.get("is_paused"):
@@ -43,12 +40,10 @@ async def news_check_task():
                 await telegram.send_message(f"⚠️ *AUTO-PAUSE:* {event_title}\nTrading paused to avoid news volatility.")
             
             elif not is_active and config.get("is_paused"):
-                # Only auto-resume if it was paused by news (not by user)
-                # For simplicity, we resume if news window is clear
                 config.set("is_paused", False)
                 await telegram.send_message("🚀 *RESUMING:* News window passed. Strategy monitor active.")
 
-            await asyncio.sleep(300) # Check every 5 mins
+            await asyncio.sleep(300)
         except Exception as e:
             print(f"News Task Error: {e}")
             await asyncio.sleep(60)
@@ -57,17 +52,16 @@ async def news_check_task():
 async def lifespan(app: FastAPI):
     # Startup
     print(f"🌍 Starting STANDALONE CLOUD MODE (Execution: {os.getenv('EXECUTION_MODE', 'MT5')})")
-    await telegram.send_message("🚀 *Gushtec AI Cloud Bot Initialized*\n\nAll systems nominal. Monitoring BTCUSD 5m.")
+    await telegram.send_message("🚀 *Gushtec AI Cloud Bot Initialized*\n\nMonitoring BTCUSD Live Ticks.")
     
-    # 1. Start Market Monitor
-    asyncio.create_task(monitor_market(process_trade))
+    # 1. Start LIVE TICK Market Monitor (v2)
+    asyncio.create_task(monitor_market_v2(ctrader, process_trade))
     
     # 2. Start News Monitor
     asyncio.create_task(news_check_task())
     
     # 3. Start Telegram Controller (for commands/status)
     await tg_controller.setup()
-    
     yield
 
 app = FastAPI(lifespan=lifespan)
@@ -99,6 +93,7 @@ def get_market_context():
     rsi = RSIIndicator(close=data['Close'], window=14).rsi().iloc[-1]
     atr = AverageTrueRange(high=data['High'], low=data['Low'], close=data['Close'], window=14).average_true_range().iloc[-1]
     return {'CPI': cpi, 'Rates': rates, 'DXY': dxy, 'RSI': rsi, 'ATR': atr}
+
 async def process_trade(signal_data):
     """The brain of the execution - Supports MT5 and cTrader"""
     side_str = signal_data.get('action') 
@@ -106,15 +101,11 @@ async def process_trade(signal_data):
     price = float(signal_data.get('price', 0))
     sl = float(signal_data.get('sl', 0))
     tp = float(signal_data.get('tp', 0))
-
-    # Use dynamic lot size if not specified in signal
+    
     qty = float(signal_data.get('qty', config.get("lot_size"))) 
 
-    # 1. AI Probability Filter (Optional)
     approved = True
-    dynamic_ai_enabled = config.get("ai_filter_enabled")
-
-    if dynamic_ai_enabled and model:
+    if config.get("ai_filter_enabled") and model:
         try:
             ctx = get_market_context()
             side = 1 if side_str.lower() == 'long' else 0
@@ -122,16 +113,12 @@ async def process_trade(signal_data):
             scaled_input = (raw_input - SCALER_MEAN) / SCALER_SCALE
             prediction = model.predict(scaled_input, verbose=0)[0][0]
             score = prediction * 100
-            print(f"AI Score for {side_str}: {score:.2f}%")
             approved = (side == 1 and score > 55) or (side == 0 and score < 45)
         except Exception as e:
             print(f"AI Filter Error: {e}")
 
-
     if approved:
         print(f"✅ TRADE APPROVED - Mode: {EXECUTION_MODE} | Asset: {symbol}")
-        
-        # Notify Telegram with Action Buttons
         await telegram.notify_entry(signal_data)
         
         if EXECUTION_MODE == 'CTRADER' and ctrader:
@@ -154,7 +141,7 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
 
 @app.get("/")
 def health():
-    return {"status": "online", "mode": EXECUTION_MODE, "ai_filter": USE_AI_FILTER}
+    return {"status": "online", "mode": EXECUTION_MODE, "ai_filter": config.get("ai_filter_enabled")}
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))

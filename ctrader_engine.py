@@ -128,6 +128,38 @@ class CTraderBot:
         data = json.loads(res)
         return data.get('payload', {}).get('position', [])
 
+    async def subscribe_live_prices(self, symbol_name, callback):
+        """Subscribes to live ticks for a symbol and executes callback on each tick"""
+        if not self.is_authenticated:
+            await self.connect()
+            
+        symbol_id = await self.get_symbol_id(symbol_name)
+        if not symbol_id: return
+        
+        # Subscribe
+        req = {
+            "payloadType": 2127, # ProtoOASubscribeSpotsReq
+            "payload": {
+                "ctidTraderAccountId": int(self.account_id),
+                "symbolId": [symbol_id]
+            }
+        }
+        await self.ws.send(json.dumps(req))
+        print(f"📡 Subscribed to live prices for {symbol_name} (ID: {symbol_id})")
+        
+        # Continuous listener loop
+        async for message in self.ws:
+            data = json.loads(message)
+            if data.get('payloadType') == 2131: # ProtoOASpotEvent
+                payload = data.get('payload', {})
+                if payload.get('symbolId') == symbol_id:
+                    # cTrader prices are usually in integers, need to handle decimal scaling
+                    # For simplicity, we just pass the raw event to the callback
+                    await callback(payload)
+            
+            # Re-handle heartbeat if received
+            if data.get('payloadType') == 2104: pass
+
     async def get_symbol_id(self, symbol_name):
         """Fetches the internal numeric ID for a symbol name"""
         if not self.is_authenticated:
