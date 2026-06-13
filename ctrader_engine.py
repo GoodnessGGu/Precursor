@@ -89,8 +89,28 @@ class CTraderBot:
                 break
 
     async def get_account_info(self):
-        # ... (existing rest api logic)
-        
+        """Fetches account details including balance and currency using REST API"""
+        try:
+            import requests
+            url = "https://api.spotware.com/connect/tradingaccounts"
+            res = requests.get(url, params={"access_token": self.access_token})
+            if res.status_code == 200:
+                accounts = res.json().get('data', [])
+                for acc in accounts:
+                    if str(acc.get('accountId')) == str(self.account_id):
+                        raw_balance = acc.get('balance', 0)
+                        digits = acc.get('moneyDigits', 2)
+                        return {
+                            "balance": raw_balance / (10**digits),
+                            "currency": acc.get('depositCurrency'),
+                            "account_id": self.account_id,
+                            "leverage": acc.get('leverage') / 100.0
+                        }
+                return {"error": f"Account {self.account_id} not found in REST response."}
+            return {"error": f"REST API Error {res.status_code}: {res.text}"}
+        except Exception as e:
+            return {"error": str(e)}
+
     async def get_open_positions(self):
         """Fetches all active positions to calculate live PnL"""
         if not self.is_authenticated:
