@@ -24,23 +24,37 @@ class CTraderBot:
         self.ws_price = None
         self.is_authenticated = False
 
+    def is_ws_open(self, ws):
+        """Safe check for websocket open state across different library versions"""
+        if ws is None: return False
+        # Modern websockets use .open property
+        return getattr(ws, "open", True) 
+
     async def connect_trade(self):
         """Dedicated connection for trading and account info"""
         print(f"Connecting Trade WebSocket to {self.env}...")
-        self.ws_trade = await websockets.connect(self.uri)
-        success = await self._authenticate(self.ws_trade)
-        if success:
-            asyncio.create_task(self.heartbeat(self.ws_trade))
-        return success
+        try:
+            self.ws_trade = await websockets.connect(self.uri)
+            success = await self._authenticate(self.ws_trade)
+            if success:
+                asyncio.create_task(self.heartbeat(self.ws_trade))
+            return success
+        except Exception as e:
+            print(f"Trade Connection Error: {e}")
+            return False
 
     async def connect_price(self):
         """Dedicated connection for live price feed"""
         print(f"Connecting Price WebSocket to {self.env}...")
-        self.ws_price = await websockets.connect(self.uri)
-        success = await self._authenticate(self.ws_price)
-        if success:
-            asyncio.create_task(self.heartbeat(self.ws_price))
-        return success
+        try:
+            self.ws_price = await websockets.connect(self.uri)
+            success = await self._authenticate(self.ws_price)
+            if success:
+                asyncio.create_task(self.heartbeat(self.ws_price))
+            return success
+        except Exception as e:
+            print(f"Price Connection Error: {e}")
+            return False
 
     async def _authenticate(self, ws):
         try:
@@ -49,7 +63,7 @@ class CTraderBot:
                 "payloadType": 2100,
                 "payload": {"clientId": self.client_id, "clientSecret": self.secret}
             }))
-            res = await ws.recv()
+            await ws.recv()
             
             # 2. Account Auth
             await ws.send(json.dumps({
@@ -66,10 +80,10 @@ class CTraderBot:
         return False
 
     async def heartbeat(self, ws):
-        while ws:
+        while True:
             try:
                 await asyncio.sleep(15)
-                if not hasattr(ws, 'closed') or ws.closed: break
+                if not self.is_ws_open(ws): break
                 await ws.send(json.dumps({"payloadType": 2104, "payload": {}}))
             except:
                 break
@@ -79,7 +93,7 @@ class CTraderBot:
         try:
             import requests
             url = "https://api.spotware.com/connect/tradingaccounts"
-            res = requests.get(url, params={"access_token": self.access_token})
+            res = requests.get(url, params={"access_token": self.access_token}, timeout=10)
             if res.status_code == 200:
                 accounts = res.json().get('data', [])
                 for acc in accounts:
@@ -90,54 +104,72 @@ class CTraderBot:
                             "currency": acc.get('depositCurrency'),
                             "account_id": self.account_id
                         }
-        except: pass
+        except Exception as e:
+            print(f"REST Account Info Error: {e}")
         return {"error": "Could not fetch account info"}
 
     async def get_open_positions(self):
-        if not self.ws_trade or self.ws_trade.closed:
+        if not self.is_ws_open(self.ws_trade):
             await self.connect_trade()
             
-        await self.ws_trade.send(json.dumps({
-            "payloadType": 2121,
-            "payload": {"ctidTraderAccountId": int(self.account_id)}
-        }))
-        res = await self.ws_trade.recv()
-        return json.loads(res).get('payload', {}).get('position', [])
+        try:
+            await self.ws_trade.send(json.dumps({
+                "payloadType": 2121,
+                "payload": {"ctidTraderAccountId": int(self.account_id)}
+            }))
+            res = await self.ws_trade.recv()
+            return json.loads(res).get('payload', {}).get('position', [])
+        except Exception as e:
+            print(f"Get Positions Error: {e}")
+            return []
 
     async def subscribe_live_prices(self, symbol_name, callback):
-        if not self.ws_price or self.ws_price.closed:
+        if not self.is_ws_open(self.ws_price):
             await self.connect_price()
             
         symbol_id = await self.get_symbol_id(self.ws_price, symbol_name)
+        if not symbol_id:
+            print(f"❌ Could not find Symbol ID for {symbol_name}")
+            return
+
         await self.ws_price.send(json.dumps({
             "payloadType": 2127,
             "payload": {"ctidTraderAccountId": int(self.account_id), "symbolId": [symbol_id]}
         }))
         
-        print(f"📡 Price Feed Live for {symbol_name}")
-        async for message in self.ws_price:
-            data = json.loads(message)
-            if data.get('payloadType') == 2131: # Spot Event
-                await callback(data.get('payload', {}))
+        print(f"📡 Price Feed Live for {symbol_name} (ID: {symbol_id})")
+        try:
+            async for message in self.ws_price:
+                data = json.loads(message)
+                if data.get('payloadType') == 2131: # Spot Event
+                    await callback(data.get('payload', {}))
+        except Exception as e:
+            print(f"Price Subscription Loop Error: {e}")
+            self.ws_price = None # Force reconnect
 
     async def get_symbol_id(self, ws, symbol_name):
-        f_id, l_id = (31, 15) if "BTC" in symbol_name.upper() else (17, 15)
-        await ws.send(json.dumps({
-            "payloadType": 2118,
-            "payload": {"ctidTraderAccountId": int(self.account_id), "firstAssetId": f_id, "lastAssetId": l_id}
-        }))
-        res = await ws.recv()
-        symbols = json.loads(res).get('payload', {}).get('symbol', [])
-        for s in symbols:
-            if s.get('symbolName').upper() == symbol_name.upper():
-                return s.get('symbolId')
+        try:
+            f_id, l_id = (31, 15) if "BTC" in symbol_name.upper() else (17, 15)
+            await ws.send(json.dumps({
+                "payloadType": 2118,
+                "payload": {"ctidTraderAccountId": int(self.account_id), "firstAssetId": f_id, "lastAssetId": l_id}
+            }))
+            res = await ws.recv()
+            symbols = json.loads(res).get('payload', {}).get('symbol', [])
+            for s in symbols:
+                if s.get('symbolName').upper() == symbol_name.upper():
+                    return s.get('symbolId')
+        except Exception as e:
+            print(f"Get Symbol ID Error: {e}")
         return None
 
     async def place_order(self, symbol, side, qty, sl_price=None, tp_price=None):
-        if not self.ws_trade or self.ws_trade.closed:
+        if not self.is_ws_open(self.ws_trade):
             await self.connect_trade()
 
         symbol_id = await self.get_symbol_id(self.ws_trade, symbol)
+        if not symbol_id: return {"error": "Symbol ID not found"}
+        
         volume = int(float(qty) * 100000)
         
         req = {
@@ -153,12 +185,16 @@ class CTraderBot:
         if sl_price: req['payload']['stopLoss'] = float(sl_price)
         if tp_price: req['payload']['takeProfit'] = float(tp_price)
 
-        await self.ws_trade.send(json.dumps(req))
-        for _ in range(5):
-            data = json.loads(await self.ws_trade.recv())
-            if data.get('payloadType') == 2126:
-                payload = data.get('payload', {})
-                if payload.get('executionType') == 3:
-                    return {"error": f"Rejected: {payload.get('errorCode')}"}
-                return {"status": "success", "data": payload}
-        return {"error": "Timeout"}
+        try:
+            await self.ws_trade.send(json.dumps(req))
+            for _ in range(5):
+                data = json.loads(await self.ws_trade.recv())
+                if data.get('payloadType') == 2126:
+                    payload = data.get('payload', {})
+                    if payload.get('executionType') == 3:
+                        return {"error": f"Rejected: {payload.get('errorCode')}"}
+                    return {"status": "success", "data": payload}
+        except Exception as e:
+            return {"error": f"Order Send Error: {e}"}
+            
+        return {"error": "Timeout waiting for execution"}
