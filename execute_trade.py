@@ -11,10 +11,10 @@ async def execute(side, qty=0.01, symbol="XAUUSD"):
     print(f"Target: {side.upper()} {qty} Lots of {symbol}")
     
     bot = CTraderBot()
-    success, msg = await bot.connect()
+    success = await bot.connect_trade()
     
     if not success:
-        print(f"❌ Connection Failed: {msg}")
+        print(f"❌ Trade Connection Failed.")
         return
 
     # Execute trade
