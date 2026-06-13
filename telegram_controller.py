@@ -4,6 +4,7 @@ import os
 import json
 import asyncio
 from dotenv import load_dotenv
+from config_manager import config
 
 load_dotenv()
 
@@ -28,10 +29,13 @@ class TelegramController:
 
     async def get_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         mode = os.getenv("EXECUTION_MODE", "MT5")
-        ai_filter = os.getenv("USE_AI_FILTER", "False")
         
         # Import dynamic sync time
-        from strategy_monitor import LAST_CANDLE_TIME, IS_PAUSED
+        from strategy_monitor import LAST_CANDLE_TIME
+        is_paused = config.get("is_paused")
+        ai_filter = config.get("ai_filter_enabled")
+        rr = config.get("rr_ratio")
+        lot = config.get("lot_size")
         
         balance_str = "Fetching..."
         pnl_str = "$0.00"
@@ -40,15 +44,13 @@ class TelegramController:
             info = await self.ctrader.get_account_info()
             if "error" not in info:
                 balance_str = f"${info['balance']:,.2f} {info['currency']}"
-                
-                # Fetch positions to calculate live PnL
                 positions = await self.ctrader.get_open_positions()
                 total_pnl = sum([p.get('unrealizedNetProfit', 0) for p in positions]) / 100.0
                 pnl_str = f"${total_pnl:,.2f}"
                 if total_pnl > 0: pnl_str = "🟢 " + pnl_str
                 elif total_pnl < 0: pnl_str = "🔴 " + pnl_str
 
-        status_icon = "⏸️ PAUSED" if IS_PAUSED else "🚀 ACTIVE"
+        status_icon = "⏸️ PAUSED" if is_paused else "🚀 ACTIVE"
 
         await update.message.reply_text(
             f"📡 *Gushtec Bot Status: {status_icon}*\n"
@@ -56,10 +58,13 @@ class TelegramController:
             f"💰 *Balance:* `{balance_str}`\n"
             f"📈 *Live PnL:* `{pnl_str}`\n"
             f"━━━━━━━━━━━━━━━\n"
+            f"⚙️ *Settings:*\n"
+            f"• RR Ratio: `{rr}:1`\n"
+            f"• Lot Size: `{lot}`\n"
+            f"• AI Filter: `{'Enabled ✅' if ai_filter else 'Disabled ❌'}`\n"
+            f"━━━━━━━━━━━━━━━\n"
             f"🔹 *Mode:* {mode}\n"
-            f"🔹 *AI Filter:* {ai_filter}\n"
-            f"🔹 *Asset:* BTCUSD\n"
-            f"🔹 *Timeframe:* 5m\n"
+            f"🔹 *Asset:* BTCUSD (5m)\n"
             f"🔄 *Last Sync:* `{LAST_CANDLE_TIME}`\n"
             f"━━━━━━━━━━━━━━━",
             parse_mode='Markdown'
@@ -83,14 +88,58 @@ class TelegramController:
         await update.message.reply_text(msg, parse_mode='Markdown')
 
     async def get_settings(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        keyboard = [
+            [
+                InlineKeyboardButton("⚖️ RR: 1:1", callback_data="set_rr_1.0"),
+                InlineKeyboardButton("⚖️ RR: 3:1", callback_data="set_rr_3.0")
+            ],
+            [
+                InlineKeyboardButton("📦 Lot: 0.01", callback_data="set_lot_0.01"),
+                InlineKeyboardButton("📦 Lot: 0.10", callback_data="set_lot_0.1")
+            ],
+            [
+                InlineKeyboardButton("🧠 Toggle AI Filter", callback_data="toggle_ai")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
-            "⚙️ *Configuration Control*\n"
-            "Current settings:\n"
-            "• RR Ratio: 1.0\n"
-            "• Leverage: 1:100\n\n"
-            "Use commands like `/set_rr 2.0` to adjust (Admin only).",
+            "⚙️ *Gushtec AI Settings*\n"
+            "Adjust your risk and logic parameters in real-time.",
+            reply_markup=reply_markup,
             parse_mode='Markdown'
         )
+
+    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        if query.data.startswith("set_rr_"):
+            val = float(query.data.replace("set_rr_", ""))
+            config.set("rr_ratio", val)
+            await query.edit_message_text(text=f"✅ *Risk:Reward set to {val}:1*", parse_mode='Markdown')
+            
+        elif query.data.startswith("set_lot_"):
+            val = float(query.data.replace("set_lot_", ""))
+            config.set("lot_size", val)
+            await query.edit_message_text(text=f"✅ *Default Lot Size set to {val}*", parse_mode='Markdown')
+            
+        elif query.data == "toggle_ai":
+            current = config.get("ai_filter_enabled")
+            config.set("ai_filter_enabled", not current)
+            status = "ENABLED ✅" if not current else "DISABLED ❌"
+            await query.edit_message_text(text=f"🧠 *AI Probability Filter is now {status}*", parse_mode='Markdown')
+            
+        elif query.data.startswith("close_"):
+            symbol = query.data.replace("close_", "")
+            await query.edit_message_text(text=f"⏳ *Closing {symbol} position...*", parse_mode='Markdown')
+            # Actual close logic would be implemented here
+
+    async def toggle_pause(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        text = update.message.text
+        should_pause = "Pause" in text
+        config.set("is_paused", should_pause)
+        status = "PAUSED ⏸️" if should_pause else "RESUMED 🚀"
+        await update.message.reply_text(f"🤖 Bot has been *{status}* by user.", parse_mode='Markdown')
 
     async def get_news(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🚀 *Fetching latest market news...*")
@@ -101,29 +150,6 @@ class TelegramController:
             parse_mode='Markdown'
         )
 
-    async def toggle_pause(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        import strategy_monitor
-        text = update.message.text
-        should_pause = "Pause" in text
-        strategy_monitor.IS_PAUSED = should_pause
-        status = "PAUSED ⏸️" if should_pause else "RESUMED 🚀"
-        await update.message.reply_text(f"🤖 Bot has been *{status}* by user.", parse_mode='Markdown')
-
-    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        if query.data.startswith("close_"):
-            symbol = query.data.replace("close_", "")
-            await query.edit_message_text(text=f"⏳ *Closing {symbol} position...*", parse_mode='Markdown')
-            
-            if self.ctrader:
-                # Close Logic
-                await asyncio.sleep(1)
-                await query.edit_message_text(text=f"✅ *{symbol} Position Closed Successfully.*", parse_mode='Markdown')
-            else:
-                await query.edit_message_text(text=f"❌ *Error:* cTrader engine not linked.", parse_mode='Markdown')
-
     async def setup(self):
         if not self.token: return None
         app = ApplicationBuilder().token(self.token).build()
@@ -132,7 +158,7 @@ class TelegramController:
         app.add_handler(MessageHandler(filters.Text("📊 Status"), self.get_status))
         app.add_handler(MessageHandler(filters.Text("⚙️ Settings"), self.get_settings))
         app.add_handler(MessageHandler(filters.Text("📢 Latest News"), self.get_news))
-        app.add_handler(MessageHandler(filters.Text("📅 Calendar"), self.get_calendar))
+        app.add_handler(MessageHandler(filters.Text("📰 Calendar"), self.get_calendar))
         app.add_handler(MessageHandler(filters.Regex("Pause Bot"), self.toggle_pause))
         app.add_handler(MessageHandler(filters.Regex("Resume Bot"), self.toggle_pause))
         app.add_handler(CallbackQueryHandler(self.handle_callback))

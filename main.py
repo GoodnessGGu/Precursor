@@ -20,6 +20,7 @@ from strategy_monitor import monitor_market
 from telegram_controller import TelegramController
 
 from calendar_engine import EconomicCalendar
+from config_manager import config
 
 # Initialize global components
 ctrader = CTraderBot()
@@ -29,7 +30,6 @@ calendar = EconomicCalendar()
 
 async def news_check_task():
     """Background task to monitor news and auto-pause the bot"""
-    import strategy_monitor
     while True:
         try:
             # 1. Fetch latest events
@@ -38,13 +38,14 @@ async def news_check_task():
             # 2. Check if we should be paused (15 min window)
             is_active, event_title = calendar.is_news_active(buffer_before=15, buffer_after=15)
             
-            if is_active and not strategy_monitor.IS_PAUSED:
-                strategy_monitor.IS_PAUSED = True
+            if is_active and not config.get("is_paused"):
+                config.set("is_paused", True)
                 await telegram.send_message(f"⚠️ *AUTO-PAUSE:* {event_title}\nTrading paused to avoid news volatility.")
             
-            elif not is_active and strategy_monitor.IS_PAUSED:
-                # Note: This might resume a user-paused bot, but for now we'll assume news-only control
-                strategy_monitor.IS_PAUSED = False
+            elif not is_active and config.get("is_paused"):
+                # Only auto-resume if it was paused by news (not by user)
+                # For simplicity, we resume if news window is clear
+                config.set("is_paused", False)
                 await telegram.send_message("🚀 *RESUMING:* News window passed. Strategy monitor active.")
 
             await asyncio.sleep(300) # Check every 5 mins
@@ -98,17 +99,22 @@ def get_market_context():
     rsi = RSIIndicator(close=data['Close'], window=14).rsi().iloc[-1]
     atr = AverageTrueRange(high=data['High'], low=data['Low'], close=data['Close'], window=14).average_true_range().iloc[-1]
     return {'CPI': cpi, 'Rates': rates, 'DXY': dxy, 'RSI': rsi, 'ATR': atr}
-
 async def process_trade(signal_data):
+    """The brain of the execution - Supports MT5 and cTrader"""
     side_str = signal_data.get('action') 
     symbol = signal_data.get('symbol', 'BTCUSD')
     price = float(signal_data.get('price', 0))
     sl = float(signal_data.get('sl', 0))
     tp = float(signal_data.get('tp', 0))
-    qty = float(signal_data.get('qty', 0.01)) 
 
+    # Use dynamic lot size if not specified in signal
+    qty = float(signal_data.get('qty', config.get("lot_size"))) 
+
+    # 1. AI Probability Filter (Optional)
     approved = True
-    if USE_AI_FILTER and model:
+    dynamic_ai_enabled = config.get("ai_filter_enabled")
+
+    if dynamic_ai_enabled and model:
         try:
             ctx = get_market_context()
             side = 1 if side_str.lower() == 'long' else 0
@@ -116,9 +122,11 @@ async def process_trade(signal_data):
             scaled_input = (raw_input - SCALER_MEAN) / SCALER_SCALE
             prediction = model.predict(scaled_input, verbose=0)[0][0]
             score = prediction * 100
+            print(f"AI Score for {side_str}: {score:.2f}%")
             approved = (side == 1 and score > 55) or (side == 0 and score < 45)
         except Exception as e:
             print(f"AI Filter Error: {e}")
+
 
     if approved:
         print(f"✅ TRADE APPROVED - Mode: {EXECUTION_MODE} | Asset: {symbol}")

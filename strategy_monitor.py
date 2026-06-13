@@ -57,24 +57,28 @@ class HybridStrategy:
 
         return None
 
+from config_manager import config
+
 # Global sync variable
 LAST_CANDLE_TIME = "Initializing..."
-IS_PAUSED = False # New pause flag for news/admin control
 
 async def monitor_market(callback):
     """Background loop for BTC 5m (Optimized Cloud Mode - +5,584% Config)"""
-    global LAST_CANDLE_TIME, IS_PAUSED
+    global LAST_CANDLE_TIME
     print("🚀 Starting BTC 5m Monitor ($100 Budget Edition - Optimized)")
-    # Updating to 1:1 RR as per the successful $5k+ backtest config
-    strat = HybridStrategy(fvg_threshold=0.0, rr_ratio=1.0)
     
     while True:
-        if IS_PAUSED:
+        # Use persistent config for pause status
+        if config.get("is_paused"):
             print("⏸️ Monitor Paused (News or Admin Control). Skipping...")
             await asyncio.sleep(60)
             continue
             
         try:
+            # Refresh strategy with latest RR from config
+            rr = config.get("rr_ratio")
+            strat = HybridStrategy(fvg_threshold=0.0, rr_ratio=rr)
+
             # Fetch Bitcoin Data (5m timeframe)
             data = yf.download("BTC-USD", period="1d", interval="5m", progress=False)
             if data.empty:
