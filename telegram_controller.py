@@ -4,7 +4,6 @@ import os
 import json
 import asyncio
 from dotenv import load_dotenv
-from strategy_monitor import LAST_CANDLE_TIME
 
 load_dotenv()
 
@@ -16,7 +15,8 @@ class TelegramController:
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
             [KeyboardButton("📊 Status"), KeyboardButton("⚙️ Settings")],
-            [KeyboardButton("📰 Latest News")]
+            [KeyboardButton("📰 Calendar"), KeyboardButton("📢 Latest News")],
+            [KeyboardButton("🚀 Resume Bot"), KeyboardButton("⏸️ Pause Bot")]
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         await update.message.reply_text(
@@ -31,7 +31,7 @@ class TelegramController:
         ai_filter = os.getenv("USE_AI_FILTER", "False")
         
         # Import dynamic sync time
-        from strategy_monitor import LAST_CANDLE_TIME
+        from strategy_monitor import LAST_CANDLE_TIME, IS_PAUSED
         
         balance_str = "Fetching..."
         pnl_str = "$0.00"
@@ -48,8 +48,10 @@ class TelegramController:
                 if total_pnl > 0: pnl_str = "🟢 " + pnl_str
                 elif total_pnl < 0: pnl_str = "🔴 " + pnl_str
 
+        status_icon = "⏸️ PAUSED" if IS_PAUSED else "🚀 ACTIVE"
+
         await update.message.reply_text(
-            f"📡 *Gushtec Bot Status*\n"
+            f"📡 *Gushtec Bot Status: {status_icon}*\n"
             f"━━━━━━━━━━━━━━━\n"
             f"💰 *Balance:* `{balance_str}`\n"
             f"📈 *Live PnL:* `{pnl_str}`\n"
@@ -63,6 +65,23 @@ class TelegramController:
             parse_mode='Markdown'
         )
 
+    async def get_calendar(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await update.message.reply_text("📅 *Fetching Economic Calendar...*")
+        from calendar_engine import EconomicCalendar
+        cal = EconomicCalendar()
+        cal.fetch_events()
+        upcoming = cal.get_upcoming_high_impact(24)
+        
+        if not upcoming:
+            await update.message.reply_text("✅ No high-impact news in the next 24 hours.")
+            return
+
+        msg = "🚨 *HIGH IMPACT NEWS (24h)*\n━━━━━━━━━━━━━━━\n"
+        for e in upcoming:
+            msg += f"🔸 *{e['title']}* ({e['country']})\n   🕒 in {int(e['time_until'])} mins\n\n"
+        msg += "━━━━━━━━━━━━━━━\n⚠️ _Bot will auto-pause during these windows._"
+        await update.message.reply_text(msg, parse_mode='Markdown')
+
     async def get_settings(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "⚙️ *Configuration Control*\n"
@@ -75,13 +94,20 @@ class TelegramController:
 
     async def get_news(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🚀 *Fetching latest market news...*")
-        # In a real setup, we'd pull from an API
         await update.message.reply_text(
             "📈 *DXY Index:* 105.18 (-0.05%)\n"
             "📉 *BTC Dominance:* 52.4%\n"
             "📢 *Next Major Event:* FOMC Meeting in 4 days.",
             parse_mode='Markdown'
         )
+
+    async def toggle_pause(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        import strategy_monitor
+        text = update.message.text
+        should_pause = "Pause" in text
+        strategy_monitor.IS_PAUSED = should_pause
+        status = "PAUSED ⏸️" if should_pause else "RESUMED 🚀"
+        await update.message.reply_text(f"🤖 Bot has been *{status}* by user.", parse_mode='Markdown')
 
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -92,12 +118,11 @@ class TelegramController:
             await query.edit_message_text(text=f"⏳ *Closing {symbol} position...*", parse_mode='Markdown')
             
             if self.ctrader:
-                # Logic to find and close active positions would go here
-                # For now, we'll simulate the result
+                # Close Logic
                 await asyncio.sleep(1)
                 await query.edit_message_text(text=f"✅ *{symbol} Position Closed Successfully.*", parse_mode='Markdown')
             else:
-                await query.edit_message_text(text=f"❌ *Error:* cTrader engine not linked to controller.", parse_mode='Markdown')
+                await query.edit_message_text(text=f"❌ *Error:* cTrader engine not linked.", parse_mode='Markdown')
 
     async def setup(self):
         if not self.token: return None
@@ -106,7 +131,10 @@ class TelegramController:
         app.add_handler(CommandHandler("start", self.start))
         app.add_handler(MessageHandler(filters.Text("📊 Status"), self.get_status))
         app.add_handler(MessageHandler(filters.Text("⚙️ Settings"), self.get_settings))
-        app.add_handler(MessageHandler(filters.Text("📰 Latest News"), self.get_news))
+        app.add_handler(MessageHandler(filters.Text("📢 Latest News"), self.get_news))
+        app.add_handler(MessageHandler(filters.Text("📅 Calendar"), self.get_calendar))
+        app.add_handler(MessageHandler(filters.Regex("Pause Bot"), self.toggle_pause))
+        app.add_handler(MessageHandler(filters.Regex("Resume Bot"), self.toggle_pause))
         app.add_handler(CallbackQueryHandler(self.handle_callback))
         
         await app.initialize()

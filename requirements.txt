@@ -12,3 +12,5 @@ gunicorn
 python-dotenv
 requests
 python-telegram-bot
+python-dateutil
+pytz

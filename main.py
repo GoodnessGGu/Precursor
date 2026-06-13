@@ -19,10 +19,38 @@ from strategy_monitor import monitor_market
 
 from telegram_controller import TelegramController
 
+from calendar_engine import EconomicCalendar
+
 # Initialize global components
 ctrader = CTraderBot()
 telegram = TelegramNotifier()
 tg_controller = TelegramController(ctrader_bot=ctrader)
+calendar = EconomicCalendar()
+
+async def news_check_task():
+    """Background task to monitor news and auto-pause the bot"""
+    import strategy_monitor
+    while True:
+        try:
+            # 1. Fetch latest events
+            calendar.fetch_events()
+            
+            # 2. Check if we should be paused (15 min window)
+            is_active, event_title = calendar.is_news_active(buffer_before=15, buffer_after=15)
+            
+            if is_active and not strategy_monitor.IS_PAUSED:
+                strategy_monitor.IS_PAUSED = True
+                await telegram.send_message(f"⚠️ *AUTO-PAUSE:* {event_title}\nTrading paused to avoid news volatility.")
+            
+            elif not is_active and strategy_monitor.IS_PAUSED:
+                # Note: This might resume a user-paused bot, but for now we'll assume news-only control
+                strategy_monitor.IS_PAUSED = False
+                await telegram.send_message("🚀 *RESUMING:* News window passed. Strategy monitor active.")
+
+            await asyncio.sleep(300) # Check every 5 mins
+        except Exception as e:
+            print(f"News Task Error: {e}")
+            await asyncio.sleep(60)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -33,7 +61,10 @@ async def lifespan(app: FastAPI):
     # 1. Start Market Monitor
     asyncio.create_task(monitor_market(process_trade))
     
-    # 2. Start Telegram Controller (for commands/status)
+    # 2. Start News Monitor
+    asyncio.create_task(news_check_task())
+    
+    # 3. Start Telegram Controller (for commands/status)
     await tg_controller.setup()
     
     yield
