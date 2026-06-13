@@ -21,8 +21,15 @@ class HybridStrategy:
         """
         if len(df_5m) < 5: return None
         
-        # 1. Check for New FVG (from closed candles)
-        # We only do this once per 5m candle
+        # 1. Price Scaling Check (cTrader sends integers)
+        price = (bid + ask) / 2.0
+        if price > 10000000: # 5 digits (e.g. 6400000000)
+            price = price / 100000.0
+        elif price > 1000000: # 2 digits (e.g. 6400000)
+            price = price / 100.0
+            
+        # 2. Check for New FVG (from closed candles)
+        # ...
         last_candle_ts = df_5m.index[-1]
         if last_candle_ts != self.last_candle_processed:
             self.last_candle_processed = last_candle_ts
@@ -48,8 +55,7 @@ class HybridStrategy:
                 print("🗑️ FVG NEUTRALIZED: Bearish box pierced.")
                 self.bearish_fvg = None
 
-        # 2. Entry Logic (Real-time Tick Check)
-        price = (bid + ask) / 2.0
+        # 3. Entry Logic (Real-time Tick Check)
         
         # Log distance to FVG periodically for visibility (every 50 ticks)
         if not hasattr(self, 'tick_count'): self.tick_count = 0
@@ -103,8 +109,14 @@ async def monitor_market_v2(ctrader, callback):
 
         raw_bid = payload.get('bid', 0)
         raw_ask = payload.get('ask', raw_bid)
-        bid = raw_bid / 100.0
-        ask = raw_ask / 100.0
+        
+        # Scaling
+        bid, ask = raw_bid, raw_ask
+        if bid > 10000000:
+            bid, ask = bid / 100000.0, ask / 100000.0
+        elif bid > 1000000:
+            bid, ask = bid / 100.0, ask / 100.0
+            
         LAST_TICK_PRICE = (bid + ask) / 2.0
 
         # Every 30 ticks, we refresh the 5m candles (using Bitstamp equivalent)
