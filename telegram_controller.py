@@ -27,8 +27,27 @@ class TelegramController:
     async def get_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         mode = os.getenv("EXECUTION_MODE", "MT5")
         ai_filter = os.getenv("USE_AI_FILTER", "False")
+        
+        balance_str = "Fetching..."
+        pnl_str = "$0.00"
+        
+        if self.ctrader:
+            info = await self.ctrader.get_account_info()
+            if "error" not in info:
+                balance_str = f"${info['balance']:,.2f} {info['currency']}"
+                
+                # Fetch positions to calculate live PnL
+                positions = await self.ctrader.get_open_positions()
+                total_pnl = sum([p.get('unrealizedNetProfit', 0) for p in positions]) / 100.0
+                pnl_str = f"${total_pnl:,.2f}"
+                if total_pnl > 0: pnl_str = "🟢 " + pnl_str
+                elif total_pnl < 0: pnl_str = "🔴 " + pnl_str
+
         await update.message.reply_text(
-            f"📡 *Current Bot Status*\n"
+            f"📡 *Gushtec Bot Status*\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"💰 *Balance:* `{balance_str}`\n"
+            f"📈 *Live PnL:* `{pnl_str}`\n"
             f"━━━━━━━━━━━━━━━\n"
             f"🔹 *Mode:* {mode}\n"
             f"🔹 *AI Filter:* {ai_filter}\n"

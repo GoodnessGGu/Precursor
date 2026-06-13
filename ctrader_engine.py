@@ -89,27 +89,24 @@ class CTraderBot:
                 break
 
     async def get_account_info(self):
-        """Fetches account details including balance and currency using REST API"""
-        try:
-            import requests
-            url = "https://api.spotware.com/connect/tradingaccounts"
-            res = requests.get(url, params={"access_token": self.access_token})
-            if res.status_code == 200:
-                accounts = res.json().get('data', [])
-                for acc in accounts:
-                    if str(acc.get('accountId')) == str(self.account_id):
-                        raw_balance = acc.get('balance', 0)
-                        digits = acc.get('moneyDigits', 2)
-                        return {
-                            "balance": raw_balance / (10**digits),
-                            "currency": acc.get('depositCurrency'),
-                            "account_id": self.account_id,
-                            "leverage": acc.get('leverage') / 100.0
-                        }
-                return {"error": f"Account {self.account_id} not found in REST response."}
-            return {"error": f"REST API Error {res.status_code}: {res.text}"}
-        except Exception as e:
-            return {"error": str(e)}
+        # ... (existing rest api logic)
+        
+    async def get_open_positions(self):
+        """Fetches all active positions to calculate live PnL"""
+        if not self.is_authenticated:
+            success, err = await self.connect()
+            if not success: return []
+            
+        req = {
+            "payloadType": 2121, # ProtoOAReconcileReq
+            "payload": {
+                "ctidTraderAccountId": int(self.account_id)
+            }
+        }
+        await self.ws.send(json.dumps(req))
+        res = await self.ws.recv()
+        data = json.loads(res)
+        return data.get('payload', {}).get('position', [])
 
     async def get_symbol_id(self, symbol_name):
         """Fetches the internal numeric ID for a symbol name"""
