@@ -58,9 +58,10 @@ class HybridStrategy:
         return None
 
 async def monitor_market(callback):
-    """Background loop for BTC 5m (Optimized Cloud Mode)"""
-    print("🚀 Starting BTC 5m Monitor ($100 Budget Mode - Optimized)")
-    strat = HybridStrategy(rr_ratio=3.0)
+    """Background loop for BTC 5m (Optimized Cloud Mode - +5,584% Config)"""
+    print("🚀 Starting BTC 5m Monitor ($100 Budget Edition - Optimized)")
+    # Using 3.0 RR as the primary profit driver from the vault settings
+    strat = HybridStrategy(fvg_threshold=0.0, rr_ratio=3.0)
     
     while True:
         try:
@@ -75,10 +76,10 @@ async def monitor_market(callback):
 
             signal = strat.scan_for_signals(data)
             if signal:
-                print(f"🎯 BTC SIGNAL: {signal['action'].upper()} @ {signal['price']}")
+                print(f"🎯 BTC OPTIMIZED SIGNAL: {signal['action'].upper()} @ {signal['price']}")
                 await callback(signal)
 
-            # Check every 60 seconds for 5m candle updates
+            # Check for new candle every 60 seconds
             await asyncio.sleep(60)
             
         except Exception as e:
