@@ -60,8 +60,8 @@ class HybridStrategy:
 async def monitor_market(callback):
     """Background loop for BTC 5m (Optimized Cloud Mode - +5,584% Config)"""
     print("🚀 Starting BTC 5m Monitor ($100 Budget Edition - Optimized)")
-    # Using 3.0 RR as the primary profit driver from the vault settings
-    strat = HybridStrategy(fvg_threshold=0.0, rr_ratio=3.0)
+    # Updating to 1:1 RR as per the successful $5k+ backtest config
+    strat = HybridStrategy(fvg_threshold=0.0, rr_ratio=1.0)
     
     while True:
         try:
