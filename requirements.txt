@@ -11,3 +11,4 @@ python-multipart
 gunicorn
 python-dotenv
 requests
+python-telegram-bot
