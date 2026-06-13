@@ -75,12 +75,17 @@ class CTraderBot:
         """Keep-alive loop (cTrader requires a ping every 25s)"""
         while self.ws:
             try:
-                if not self.ws.open: break
-                await asyncio.sleep(15) # Faster ping for cloud stability
+                # Shorter sleep for stability
+                await asyncio.sleep(15) 
+                
+                # Check if closed
+                if not hasattr(self.ws, 'closed') or self.ws.closed:
+                    break
+                
                 ping = {"payloadType": 2104, "payload": {}} 
                 await self.ws.send(json.dumps(ping))
             except Exception as e:
-                print(f"Heartbeat Error: {e}")
+                print(f"Heartbeat Loop Stopped: {e}")
                 break
 
     async def get_account_info(self):
