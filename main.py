@@ -22,13 +22,13 @@ from telegram_controller import TelegramController
 # Initialize global components
 ctrader = CTraderBot()
 telegram = TelegramNotifier()
-tg_controller = TelegramController()
+tg_controller = TelegramController(ctrader_bot=ctrader)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     print(f"🌍 Starting STANDALONE CLOUD MODE (Execution: {os.getenv('EXECUTION_MODE', 'MT5')})")
-    await telegram.send_message("✅ *Gushtec AI Cloud Bot Started*\nAsset: BTCUSD (5m)\nMode: Optimized Standalone")
+    await telegram.send_message("🚀 *Gushtec AI Cloud Bot Initialized*\n\nAll systems nominal. Monitoring BTCUSD 5m.")
     
     # 1. Start Market Monitor
     asyncio.create_task(monitor_market(process_trade))
@@ -92,7 +92,7 @@ async def process_trade(signal_data):
     if approved:
         print(f"✅ TRADE APPROVED - Mode: {EXECUTION_MODE} | Asset: {symbol}")
         
-        # Notify Telegram
+        # Notify Telegram with Action Buttons
         await telegram.notify_entry(signal_data)
         
         if EXECUTION_MODE == 'CTRADER' and ctrader:

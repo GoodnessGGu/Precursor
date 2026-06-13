@@ -1,6 +1,6 @@
 import os
 import asyncio
-from telegram import Bot
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -13,16 +13,26 @@ class TelegramNotifier:
         self.bot = Bot(token=TELEGRAM_BOT_TOKEN) if TELEGRAM_BOT_TOKEN else None
         self.chat_id = TELEGRAM_CHAT_ID
 
-    async def send_message(self, text):
+    async def send_message(self, text, reply_markup=None):
         if self.bot and self.chat_id:
             try:
-                await self.bot.send_message(chat_id=self.chat_id, text=text, parse_mode='Markdown')
+                await self.bot.send_message(chat_id=self.chat_id, text=text, parse_mode='Markdown', reply_markup=reply_markup)
             except Exception as e:
                 print(f"Telegram Error: {e}")
 
     async def notify_entry(self, signal):
+        # Create Inline Buttons for the trade alert
+        keyboard = [
+            [
+                InlineKeyboardButton("⚡ Close Position", callback_data=f"close_{signal['symbol']}"),
+                InlineKeyboardButton("📈 View Chart", url=f"https://www.tradingview.com/chart/?symbol={signal['symbol']}")
+            ],
+            [InlineKeyboardButton("🛑 Adjust Stop Loss", callback_data="adjust_sl")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
         msg = (
-            f"🚀 *TRADE EXECUTED*\n"
+            f"🚀 *BTC TRADE EXECUTED*\n"
             f"━━━━━━━━━━━━━━━\n"
             f"🔹 *Asset:* {signal['symbol']}\n"
             f"🔹 *Action:* {signal['action'].upper()}\n"
@@ -30,9 +40,9 @@ class TelegramNotifier:
             f"🛑 *SL:* {signal['sl']:.2f}\n"
             f"🎯 *TP:* {signal['tp']:.2f}\n"
             f"━━━━━━━━━━━━━━━\n"
-            f"🤖 _Monitoring market for exit..._"
+            f"🤖 _Use buttons below to control the trade._"
         )
-        await self.send_message(msg)
+        await self.send_message(msg, reply_markup=reply_markup)
 
     async def notify_exit(self, symbol, pnl, reason):
         icon = "✅" if pnl > 0 else "❌"
