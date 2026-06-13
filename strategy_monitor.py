@@ -41,23 +41,35 @@ class HybridStrategy:
                 print(f"🆕 FVG DETECTED: Bearish at {self.bearish_fvg['bottom']} - {self.bearish_fvg['top']}")
 
             # Efficiency Filter: If candle closes through FVG, kill it
-            if self.bullish_fvg and curr_c['Low'] <= self.bullish_fvg['bottom']: self.bullish_fvg = None
-            if self.bearish_fvg and curr_c['High'] >= self.bearish_fvg['top']: self.bearish_fvg = None
+            if self.bullish_fvg and curr_c['Low'] <= self.bullish_fvg['bottom']: 
+                print("🗑️ FVG NEUTRALIZED: Bullish box pierced.")
+                self.bullish_fvg = None
+            if self.bearish_fvg and curr_c['High'] >= self.bearish_fvg['top']: 
+                print("🗑️ FVG NEUTRALIZED: Bearish box pierced.")
+                self.bearish_fvg = None
 
         # 2. Entry Logic (Real-time Tick Check)
-        # Price is currently inside a valid FVG
         price = (bid + ask) / 2.0
         
+        # Log distance to FVG periodically for visibility (every 50 ticks)
+        if not hasattr(self, 'tick_count'): self.tick_count = 0
+        self.tick_count += 1
+        if self.tick_count % 50 == 0:
+            if self.bullish_fvg:
+                dist = price - self.bullish_fvg['top']
+                print(f"👀 WATCHING BULLISH FVG: Price is {dist:.2f} above entry zone.")
+            if self.bearish_fvg:
+                dist = self.bearish_fvg['bottom'] - price
+                print(f"👀 WATCHING BEARISH FVG: Price is {dist:.2f} below entry zone.")
+
         # LONG TRIGGER
         if self.bullish_fvg and price <= self.bullish_fvg['top'] and price > self.bullish_fvg['bottom']:
-            # For standalone, we trigger on the first touch after FVG creation
-            # In live, we can add more refined tick-rejection logic here
             sl = self.bullish_fvg['bottom']
             rr = config.get("rr_ratio")
             tp = price + (price - sl) * rr
             
             signal = {"action": "long", "symbol": "BTCUSD", "price": price, "sl": sl, "tp": tp}
-            self.bullish_fvg = None # Use it then lose it
+            self.bullish_fvg = None 
             return signal
 
         # SHORT TRIGGER
@@ -89,16 +101,13 @@ async def monitor_market_v2(ctrader, callback):
         
         if config.get("is_paused"): return
 
-        # cTrader sends prices as integers (multiplied by 10^moneyDigits)
-        # For BTCUSD on Deriv, digits is usually 2
         raw_bid = payload.get('bid', 0)
         raw_ask = payload.get('ask', raw_bid)
         bid = raw_bid / 100.0
         ask = raw_ask / 100.0
         LAST_TICK_PRICE = (bid + ask) / 2.0
 
-        # Every 60 ticks (roughly), we refresh the 5m candles to update FVG zones
-        # This keeps the FVG zones in sync with TradingView
+        # Every 30 ticks, we refresh the 5m candles (using Bitstamp equivalent)
         if not hasattr(on_tick, "counter"): on_tick.counter = 0
         on_tick.counter += 1
         
