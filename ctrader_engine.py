@@ -148,8 +148,18 @@ class CTraderBot:
             self.ws_price = None # Force reconnect
 
     async def get_symbol_id(self, ws, symbol_name):
+        """Hardcoded IDs for speed and reliability, fallback to discovery"""
+        # Hardcoded IDs discovered from your account
+        MAPPING = {
+            "BTCUSD": 101,
+            "XAUUSD": 41
+        }
+        name_up = symbol_name.upper()
+        if name_up in MAPPING:
+            return MAPPING[name_up]
+            
         try:
-            f_id, l_id = (31, 15) if "BTC" in symbol_name.upper() else (17, 15)
+            f_id, l_id = (31, 15) if "BTC" in name_up else (17, 15)
             await ws.send(json.dumps({
                 "payloadType": 2118,
                 "payload": {"ctidTraderAccountId": int(self.account_id), "firstAssetId": f_id, "lastAssetId": l_id}
@@ -157,18 +167,24 @@ class CTraderBot:
             res = await ws.recv()
             symbols = json.loads(res).get('payload', {}).get('symbol', [])
             for s in symbols:
-                if s.get('symbolName').upper() == symbol_name.upper():
+                if s.get('symbolName').upper() == name_up:
                     return s.get('symbolId')
         except Exception as e:
-            print(f"Get Symbol ID Error: {e}")
+            print(f"Discovery Error: {e}")
         return None
 
     async def place_order(self, symbol, side, qty, sl_price=None, tp_price=None):
+        """Places a Market Order with automatic reconnection"""
+        # Try to ensure connection is ready
         if not self.is_ws_open(self.ws_trade):
             await self.connect_trade()
 
         symbol_id = await self.get_symbol_id(self.ws_trade, symbol)
-        if not symbol_id: return {"error": "Symbol ID not found"}
+        if not symbol_id: 
+            # One more try if hardcode fails
+            await self.connect_trade()
+            symbol_id = await self.get_symbol_id(self.ws_trade, symbol)
+            if not symbol_id: return {"error": "Symbol ID not found after retry"}
         
         volume = int(float(qty) * 100000)
         
@@ -179,7 +195,8 @@ class CTraderBot:
                 "symbolId": symbol_id,
                 "orderType": 1,
                 "tradeSide": 1 if side.upper() in ["BUY", "LONG"] else 2,
-                "volume": volume
+                "volume": volume,
+                "comment": "Gushtec AI Pro"
             }
         }
         if sl_price: req['payload']['stopLoss'] = float(sl_price)
@@ -187,14 +204,18 @@ class CTraderBot:
 
         try:
             await self.ws_trade.send(json.dumps(req))
+            # Listen for Execution Event
             for _ in range(5):
-                data = json.loads(await self.ws_trade.recv())
-                if data.get('payloadType') == 2126:
+                res = await self.ws_trade.recv()
+                data = json.loads(res)
+                if data.get('payloadType') == 2126: # Execution Event
                     payload = data.get('payload', {})
                     if payload.get('executionType') == 3:
                         return {"error": f"Rejected: {payload.get('errorCode')}"}
                     return {"status": "success", "data": payload}
         except Exception as e:
-            return {"error": f"Order Send Error: {e}"}
+            # Force reconnect for next time
+            self.ws_trade = None
+            return {"error": f"Execution Link Error: {e}"}
             
-        return {"error": "Timeout waiting for execution"}
+        return {"error": "Timeout waiting for confirmation"}
