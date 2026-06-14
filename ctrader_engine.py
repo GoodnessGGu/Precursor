@@ -147,6 +147,42 @@ class CTraderBot:
             print(f"Price Subscription Loop Error: {e}")
             self.ws_price = None 
 
+    async def close_position(self, position_id, volume):
+        """Closes a specific position by ID and volume"""
+        if not self.is_ws_open(self.ws_trade):
+            await self.connect_trade()
+
+        req = {
+            "payloadType": 2110, # ProtoOAClosePositionReq
+            "payload": {
+                "ctidTraderAccountId": int(self.account_id),
+                "positionId": int(position_id),
+                "volume": int(volume)
+            }
+        }
+        try:
+            await self.ws_trade.send(json.dumps(req))
+            res = await self.ws_trade.recv()
+            return json.loads(res)
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def close_all_positions(self):
+        """Closes all currently open positions for the account"""
+        positions = await self.get_open_positions()
+        if not positions:
+            print("No open positions to close.")
+            return []
+
+        results = []
+        for p in positions:
+            p_id = p.get('positionId')
+            vol = p.get('tradeData', {}).get('volume', 0)
+            print(f"   - Closing Position ID: {p_id} (Vol: {vol})...")
+            res = await self.close_position(p_id, vol)
+            results.append(res)
+        return results
+
     async def get_symbol_id(self, ws, symbol_name):
         """Hardcoded IDs for speed and reliability"""
         MAPPING = {"BTCUSD": 101, "XAUUSD": 41}
