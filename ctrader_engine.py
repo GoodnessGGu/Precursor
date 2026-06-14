@@ -192,17 +192,16 @@ class CTraderBot:
             volume = int(float(qty) * 100000) # Gold
 
         # 2. Convert Absolute SL/TP to Relative Points
-        # cTrader MARKET orders expect distance in 'points' (1/10th of a pip)
-        # For BTCUSD, 1 pip is usually 0.01. So 1 point is 0.001. Multiplier = 1,000
-        # For Gold, 1 pip is 0.01. Multiplier = 1,000
-        # Let's use 10,000 to be safe (covering 0.0001 precision)
-        multiplier = 10000 
+        # cTrader MARKET orders expect distance in 1/100,000 of a unit of price.
+        # This is constant for ALL symbols in OpenAPI 2.0.
+        multiplier = 100000 
         rel_sl = None
         rel_tp = None
         
         if sl_price and current_price:
             dist = abs(float(sl_price) - float(current_price))
-            rel_sl = int(dist * multiplier)
+            # Ensure a minimum safety distance (e.g. at least 500 points = $5.00 for BTC)
+            rel_sl = max(int(dist * multiplier), 50000)
             
         if tp_price and current_price:
             dist = abs(float(tp_price) - float(current_price))
@@ -216,7 +215,7 @@ class CTraderBot:
                 "orderType": 1, # MARKET
                 "tradeSide": 1 if side.upper() in ["BUY", "LONG"] else 2,
                 "volume": int(volume),
-                "comment": "Gushtec Hardened"
+                "comment": "Gushtec Final"
             }
         }
         
