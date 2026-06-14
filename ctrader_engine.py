@@ -147,41 +147,12 @@ class CTraderBot:
             print(f"Price Subscription Loop Error: {e}")
             self.ws_price = None 
 
-    async def close_position(self, position_id, volume):
-        """Closes a specific position by ID and volume"""
-        if not self.is_ws_open(self.ws_trade):
-            await self.connect_trade()
-
-        req = {
-            "payloadType": 2110, # ProtoOAClosePositionReq
-            "payload": {
-                "ctidTraderAccountId": int(self.account_id),
-                "positionId": int(position_id),
-                "volume": int(volume)
-            }
-        }
-        try:
-            await self.ws_trade.send(json.dumps(req))
-            res = await self.ws_trade.recv()
-            return json.loads(res)
-        except Exception as e:
-            return {"error": str(e)}
-
-    async def close_all_positions(self):
-        """Closes all currently open positions for the account"""
-        positions = await self.get_open_positions()
-        if not positions:
-            print("No open positions to close.")
-            return []
-
-        results = []
-        for p in positions:
-            p_id = p.get('positionId')
-            vol = p.get('tradeData', {}).get('volume', 0)
-            print(f"   - Closing Position ID: {p_id} (Vol: {vol})...")
-            res = await self.close_position(p_id, vol)
-            results.append(res)
-        return results
+    async def get_symbol_id(self, ws, symbol_name):
+        """Hardcoded IDs for speed and reliability"""
+        MAPPING = {"BTCUSD": 101, "XAUUSD": 41}
+        name_up = symbol_name.upper()
+        if name_up in MAPPING: return MAPPING[name_up]
+        return None
 
     async def get_symbol_specs(self, symbol_name):
         """Fetches full trading parameters for a symbol"""
@@ -262,9 +233,9 @@ class CTraderBot:
                     pt = data.get('payloadType')
                     
                     # LOG EVERY MESSAGE during wait for debugging
-                    print(f"   - [TRACE] Received Type {pt} (clientMsgId: {data.get('clientMsgId')})")
+                    print(f"   - [TRACE] Received Type {pt}")
                     
-                    if pt == 2126: # Execution Event
+                    if pt == 2126: # Execution Event (Success)
                         payload = data.get('payload', {})
                         etype = payload.get('executionType')
                         if etype == 3: # REJECTED
@@ -272,7 +243,14 @@ class CTraderBot:
                         print(f"✅ Order Confirmed: {etype}")
                         return {"status": "success", "data": payload}
                     
-                    if pt == 2142: # Error
+                    if pt == 2132: # Order Error Event (Explicit Rejection)
+                        payload = data.get('payload', {})
+                        err_code = payload.get('errorCode', 'UNKNOWN_ERROR')
+                        err_desc = payload.get('description', 'No description provided')
+                        print(f"   - [TRACE] Order Error: {err_code} ({err_desc})")
+                        return {"error": f"Broker Error: {err_code} - {err_desc}"}
+
+                    if pt == 2142: # Protocol Error
                         return {"error": f"cTrader Error: {data.get('payload', {}).get('description')}"}
                 except asyncio.TimeoutError:
                     continue 
@@ -289,3 +267,39 @@ class CTraderBot:
                 self.ws_trade = None
                 return await self.place_order(symbol, side, qty, sl_price, tp_price, retry=False)
             return {"error": f"Execution Error: {e}"}
+
+    async def close_position(self, position_id, volume):
+        """Closes a specific position by ID and volume"""
+        if not self.is_ws_open(self.ws_trade):
+            await self.connect_trade()
+
+        req = {
+            "payloadType": 2110, # ProtoOAClosePositionReq
+            "payload": {
+                "ctidTraderAccountId": int(self.account_id),
+                "positionId": int(position_id),
+                "volume": int(volume)
+            }
+        }
+        try:
+            await self.ws_trade.send(json.dumps(req))
+            res = await self.ws_trade.recv()
+            return json.loads(res)
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def close_all_positions(self):
+        """Closes all currently open positions for the account"""
+        positions = await self.get_open_positions()
+        if not positions:
+            print("No open positions to close.")
+            return []
+
+        results = []
+        for p in positions:
+            p_id = p.get('positionId')
+            vol = p.get('tradeData', {}).get('volume', 0)
+            print(f"   - Closing Position ID: {p_id} (Vol: {vol})...")
+            res = await self.close_position(p_id, vol)
+            results.append(res)
+        return results
