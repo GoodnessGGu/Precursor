@@ -183,11 +183,31 @@ class CTraderBot:
             results.append(res)
         return results
 
-    async def get_symbol_id(self, ws, symbol_name):
-        """Hardcoded IDs for speed and reliability"""
-        MAPPING = {"BTCUSD": 101, "XAUUSD": 41}
-        name_up = symbol_name.upper()
-        if name_up in MAPPING: return MAPPING[name_up]
+    async def get_symbol_specs(self, symbol_name):
+        """Fetches full trading parameters for a symbol"""
+        if not self.is_ws_open(self.ws_trade):
+            await self.connect_trade()
+            
+        symbol_id = 101 if "BTC" in symbol_name.upper() else 41
+        
+        req = {
+            "payloadType": 2114, # ProtoOASymbolByIdReq
+            "payload": {
+                "ctidTraderAccountId": int(self.account_id),
+                "symbolId": [symbol_id]
+            }
+        }
+        try:
+            await self.ws_trade.send(json.dumps(req))
+            res = await self.ws_trade.recv()
+            data = json.loads(res)
+            
+            if data.get('payloadType') == 2115: # ProtoOASymbolByIdRes
+                symbols = data.get('payload', {}).get('symbol', [])
+                for s in symbols:
+                    if s.get('symbolId') == symbol_id:
+                        return s
+        except: pass
         return None
 
     async def place_order(self, symbol, side, qty, sl_price=None, tp_price=None, retry=True):
@@ -198,10 +218,22 @@ class CTraderBot:
             if not success: return {"error": "Handshake Failed"}
 
         symbol_id = 101 if "BTC" in symbol.upper() else 41
+        
+        # 1. Fetch Specs for Dynamic Volume Correction
+        specs = await self.get_symbol_specs(symbol)
+        
+        # Default volume based on previous knowledge
         if "BTC" in symbol.upper():
             volume = int(float(qty) * 100) # 0.01 -> 1
         else:
             volume = int(float(qty) * 100000) # 0.01 -> 1000 units (Gold)
+
+        # Apply broker's minimum if discovered
+        if specs:
+            min_vol = specs.get('minVolume', 1)
+            if volume < min_vol:
+                print(f"   - Auto-Adjusting volume from {volume} to broker minimum {min_vol}")
+                volume = min_vol
 
         req = {
             "payloadType": 2106,
@@ -210,8 +242,8 @@ class CTraderBot:
                 "symbolId": symbol_id,
                 "orderType": 1,
                 "tradeSide": 1 if side.upper() in ["BUY", "LONG"] else 2,
-                "volume": volume,
-                "comment": "Gushtec Optimized"
+                "volume": int(volume),
+                "comment": "Gushtec DeepDiscovery"
             }
         }
         if sl_price: req['payload']['stopLoss'] = float(sl_price)
@@ -229,6 +261,9 @@ class CTraderBot:
                     data = json.loads(res)
                     pt = data.get('payloadType')
                     
+                    # LOG EVERY MESSAGE during wait for debugging
+                    print(f"   - [TRACE] Received Type {pt} (clientMsgId: {data.get('clientMsgId')})")
+                    
                     if pt == 2126: # Execution Event
                         payload = data.get('payload', {})
                         etype = payload.get('executionType')
@@ -240,7 +275,7 @@ class CTraderBot:
                     if pt == 2142: # Error
                         return {"error": f"cTrader Error: {data.get('payload', {}).get('description')}"}
                 except asyncio.TimeoutError:
-                    continue # Keep waiting until 15s total
+                    continue 
 
             if retry:
                 print("⚠️ Confirmation Timeout, resetting connection and retrying...")
