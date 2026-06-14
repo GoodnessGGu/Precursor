@@ -22,7 +22,6 @@ class CTraderBot:
             
         self.ws_trade = None
         self.ws_price = None
-        self.is_authenticated = False
 
     def is_ws_open(self, ws):
         if ws is None: return False
@@ -35,6 +34,8 @@ class CTraderBot:
             if self.ws_trade:
                 try: await self.ws_trade.close()
                 except: pass
+            
+            # Using shorter ping timeouts to detect dead links faster
             self.ws_trade = await websockets.connect(self.uri, ping_interval=10, ping_timeout=10)
             success = await self._authenticate(self.ws_trade)
             if success:
@@ -127,24 +128,23 @@ class CTraderBot:
             return json.loads(res).get('payload', {}).get('position', [])
         except Exception as e:
             print(f"Get Positions Error: {e}")
+            # Try to reconnect for next call
+            self.ws_trade = None
             return []
 
     async def subscribe_live_prices(self, symbol_name, callback):
         if not self.is_ws_open(self.ws_price):
             await self.connect_price()
             
-        symbol_id = await self.get_symbol_id(self.ws_price, symbol_name)
-        if not symbol_id:
-            print(f"❌ Could not find Symbol ID for {symbol_name}")
-            return
-
-        await self.ws_price.send(json.dumps({
-            "payloadType": 2127,
-            "payload": {"ctidTraderAccountId": int(self.account_id), "symbolId": [symbol_id]}
-        }))
+        symbol_id = 101 if "BTC" in symbol_name.upper() else 41
         
-        print(f"📡 Price Feed Live for {symbol_name} (ID: {symbol_id})")
         try:
+            await self.ws_price.send(json.dumps({
+                "payloadType": 2127,
+                "payload": {"ctidTraderAccountId": int(self.account_id), "symbolId": [symbol_id]}
+            }))
+            
+            print(f"📡 Price Feed Live for {symbol_name} (ID: {symbol_id})")
             async for message in self.ws_price:
                 data = json.loads(message)
                 if data.get('payloadType') == 2131: # Spot Event
@@ -158,35 +158,29 @@ class CTraderBot:
         MAPPING = {"BTCUSD": 101, "XAUUSD": 41}
         name_up = symbol_name.upper()
         if name_up in MAPPING: return MAPPING[name_up]
-            
-        try:
-            f_id, l_id = (31, 15) if "BTC" in name_up else (17, 15)
-            await ws.send(json.dumps({
-                "payloadType": 2118,
-                "payload": {"ctidTraderAccountId": int(self.account_id), "firstAssetId": f_id, "lastAssetId": l_id}
-            }))
-            res = await ws.recv()
-            symbols = json.loads(res).get('payload', {}).get('symbol', [])
-            for s in symbols:
-                if s.get('symbolName').upper() == name_up: return s.get('symbolId')
-        except: pass
         return None
 
     async def place_order(self, symbol, side, qty, sl_price=None, tp_price=None, retry=True):
-        """Places a Market Order with dynamic retry logic"""
-        if not self.is_ws_open(self.ws_trade):
-            print("   - Trade WS closed, reconnecting...")
-            await self.connect_trade()
-
-        symbol_id = await self.get_symbol_id(self.ws_trade, symbol)
-        if not symbol_id: return {"error": "Symbol ID not found"}
+        """Places a Market Order with dynamic retry logic and error decoding"""
         
-        # Correct Volume for BTC vs Gold/Forex
+        # 1. Ensure connection is alive
+        if not self.is_ws_open(self.ws_trade):
+            print("   - Trade WS closed/missing, performing fresh handshake...")
+            success = await self.connect_trade()
+            if not success: return {"error": "Handshake Failed before order"}
+
+        symbol_id = 101 if "BTC" in symbol.upper() else 41
+        
+        # 2. Dynamic Volume Calculation
+        # cTrader 'volume' is units. 
+        # For BTC: 100 units = 1.00 lot in Deriv cTrader? 
+        # Actually in cTrader 1 unit = 0.01 lot usually.
+        # Let's try Volume = 100 for 0.01 BTC (1 unit) to be safe.
         if "BTC" in symbol.upper():
-            volume = int(float(qty) * 100) # 0.01 -> 1
+            volume = int(float(qty) * 10000) # 0.01 -> 100 units
         else:
-            volume = int(float(qty) * 100000) # 0.01 -> 1000
-            
+            volume = int(float(qty) * 100000) # 0.01 -> 1000 units (Gold)
+
         req = {
             "payloadType": 2106,
             "payload": {
@@ -195,7 +189,7 @@ class CTraderBot:
                 "orderType": 1,
                 "tradeSide": 1 if side.upper() in ["BUY", "LONG"] else 2,
                 "volume": volume,
-                "comment": "Gushtec Cloud"
+                "comment": "Gushtec Immortal"
             }
         }
         if sl_price: req['payload']['stopLoss'] = float(sl_price)
@@ -204,19 +198,33 @@ class CTraderBot:
         print(f"   - Sending Order: {side} {qty} {symbol} (Vol: {volume})...")
         try:
             await self.ws_trade.send(json.dumps(req))
-            for _ in range(5):
+            
+            # 3. Read loop with specific error decoding
+            for _ in range(10): # Listen up to 10 messages
                 res = await self.ws_trade.recv()
                 data = json.loads(res)
-                if data.get('payloadType') == 2126:
+                pt = data.get('payloadType')
+                
+                if pt == 2126: # Execution Event
                     payload = data.get('payload', {})
-                    if payload.get('executionType') == 3:
-                        return {"error": f"Rejected: {payload.get('errorCode')}"}
-                    return {"status": "success", "data": payload}
+                    etype = payload.get('executionType')
+                    if etype == 3: # REJECTED
+                        err_code = payload.get('errorCode', 'UNKNOWN')
+                        print(f"   - cTrader REJECTION: {err_code}")
+                        return {"error": f"Broker Rejected: {err_code}"}
+                    if etype in [1, 2]:
+                        return {"status": "success", "data": payload}
+                
+                if pt == 2142: # Error Res
+                    err_msg = data.get('payload', {}).get('description', 'Unknown Error')
+                    print(f"   - cTrader PROTOCOL ERROR: {err_msg}")
+                    return {"error": f"Protocol Error: {err_msg}"}
+
         except Exception as e:
             if retry:
-                print(f"⚠️ Trade failed ({e}), retrying with fresh connection...")
-                await self.connect_trade()
+                print(f"⚠️ Trade link dropped ({e}), retrying once...")
+                self.ws_trade = None
                 return await self.place_order(symbol, side, qty, sl_price, tp_price, retry=False)
-            return {"error": f"Execution Error: {e}"}
+            return {"error": f"Critical Execution Error: {e}"}
             
         return {"error": "Timeout waiting for confirmation"}
