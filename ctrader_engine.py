@@ -38,7 +38,6 @@ class CTraderBot:
             self.ws_trade = await websockets.connect(self.uri, ping_interval=10, ping_timeout=10)
             success = await self._authenticate(self.ws_trade)
             if success:
-                # CRITICAL: Tiny delay to let broker process the auth
                 await asyncio.sleep(0.5)
                 asyncio.create_task(self.heartbeat(self.ws_trade))
             return success
@@ -62,14 +61,11 @@ class CTraderBot:
 
     async def _authenticate(self, ws):
         try:
-            # 1. App Auth
             await ws.send(json.dumps({
                 "payloadType": 2100,
                 "payload": {"clientId": self.client_id, "clientSecret": self.secret}
             }))
             await ws.recv()
-            
-            # 2. Account Auth
             await ws.send(json.dumps({
                 "payloadType": 2102,
                 "payload": {"ctidTraderAccountId": int(self.account_id), "accessToken": self.access_token}
@@ -92,7 +88,6 @@ class CTraderBot:
                 break
 
     async def get_account_info(self):
-        """REST API based account info (more reliable)"""
         try:
             import requests
             url = "https://api.spotware.com/connect/tradingaccounts"
@@ -181,8 +176,8 @@ class CTraderBot:
         except: pass
         return None
 
-    async def place_order(self, symbol, side, qty, sl_price=None, tp_price=None, retry=True):
-        """Places a Market Order with hardened speed-calibration and 15s timeout protection"""
+    async def place_order(self, symbol, side, qty, sl_price=None, tp_price=None, current_price=None, retry=True):
+        """Places a Market Order using RELATIVE SL/TP distance (required for Market Orders)"""
         
         if not self.is_ws_open(self.ws_trade):
             success = await self.connect_trade()
@@ -190,82 +185,76 @@ class CTraderBot:
 
         symbol_id = 101 if "BTC" in symbol.upper() else 41
         
-        # 1. Fetch Specs for Dynamic Volume Correction
-        specs = await self.get_symbol_specs(symbol)
-        
-        # Default volume based on previous knowledge
+        # 1. Volume Calibration
         if "BTC" in symbol.upper():
             volume = int(float(qty) * 100) # 0.01 -> 1
         else:
-            volume = int(float(qty) * 100000) # 0.01 -> 1000 units (Gold)
+            volume = int(float(qty) * 100000) # Gold
 
-        # Apply broker's minimum if discovered
-        if specs:
-            min_vol = specs.get('minVolume', 1)
-            if volume < min_vol:
-                print(f"   - Auto-Adjusting volume from {volume} to broker minimum {min_vol}")
-                volume = min_vol
+        # 2. Convert Absolute SL/TP to Relative Points (required for cTrader Market Orders)
+        # Unit: 1/100,000 of a unit of price
+        rel_sl = None
+        rel_tp = None
+        
+        if sl_price and current_price:
+            dist = abs(float(sl_price) - float(current_price))
+            rel_sl = int(dist * 100000)
+            
+        if tp_price and current_price:
+            dist = abs(float(tp_price) - float(current_price))
+            rel_tp = int(dist * 100000)
 
         req = {
-            "payloadType": 2106,
+            "payloadType": 2106, # ProtoOANewOrderReq
             "payload": {
                 "ctidTraderAccountId": int(self.account_id),
                 "symbolId": symbol_id,
-                "orderType": 1,
+                "orderType": 1, # MARKET
                 "tradeSide": 1 if side.upper() in ["BUY", "LONG"] else 2,
                 "volume": int(volume),
-                "comment": "Gushtec DeepDiscovery"
+                "comment": "Gushtec Relative"
             }
         }
-        if sl_price: req['payload']['stopLoss'] = round(float(sl_price), 2)
-        if tp_price: req['payload']['takeProfit'] = round(float(tp_price), 2)
+        
+        if rel_sl: req['payload']['relativeStopLoss'] = rel_sl
+        if rel_tp: req['payload']['relativeTakeProfit'] = rel_tp
 
-        print(f"   - Sending {side} Order (Vol: {volume})...")
+        print(f"   - Sending {side} Order (Vol: {volume}, relSL: {rel_sl})...")
         try:
             await self.ws_trade.send(json.dumps(req))
             
-            # Start timer for confirmation
+            # Wait for confirm
             start_time = time.time()
-            while time.time() - start_time < 15: # 15 second total patience
+            while time.time() - start_time < 15:
                 try:
                     res = await asyncio.wait_for(self.ws_trade.recv(), timeout=2.0)
                     data = json.loads(res)
                     pt = data.get('payloadType')
                     
-                    # LOG EVERY MESSAGE during wait for debugging
-                    print(f"   - [TRACE] Received Type {pt}")
-                    
-                    if pt == 2126: # Execution Event (Success)
+                    if pt == 2126: # Execution Event
                         payload = data.get('payload', {})
                         etype = payload.get('executionType')
                         if etype == 3: # REJECTED
                             return {"error": f"Broker Rejected: {payload.get('errorCode')}"}
-                        print(f"✅ Order Confirmed: {etype}")
                         return {"status": "success", "data": payload}
                     
-                    if pt == 2132: # Order Error Event (Explicit Rejection)
+                    if pt == 2132: # Order Error
                         payload = data.get('payload', {})
-                        err_code = payload.get('errorCode', 'UNKNOWN_ERROR')
-                        err_desc = payload.get('description', 'No description provided')
-                        print(f"   - [TRACE] Order Error: {err_code} ({err_desc})")
-                        return {"error": f"Broker Error: {err_code} - {err_desc}"}
+                        return {"error": f"Broker Error: {payload.get('errorCode')} - {payload.get('description')}"}
 
-                    if pt == 2142: # Protocol Error
-                        return {"error": f"cTrader Error: {data.get('payload', {}).get('description')}"}
                 except asyncio.TimeoutError:
                     continue 
 
             if retry:
-                print("⚠️ Confirmation Timeout, resetting connection and retrying...")
                 self.ws_trade = None
-                return await self.place_order(symbol, side, qty, sl_price, tp_price, retry=False)
+                return await self.place_order(symbol, side, qty, sl_price, tp_price, current_price, retry=False)
             
             return {"error": "Execution Confirmation Timeout"}
 
         except Exception as e:
             if retry:
                 self.ws_trade = None
-                return await self.place_order(symbol, side, qty, sl_price, tp_price, retry=False)
+                return await self.place_order(symbol, side, qty, sl_price, tp_price, current_price, retry=False)
             return {"error": f"Execution Error: {e}"}
 
     async def close_position(self, position_id, volume):

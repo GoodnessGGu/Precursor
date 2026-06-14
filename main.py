@@ -122,7 +122,7 @@ async def process_trade(signal_data):
         await telegram.notify_entry(signal_data)
         
         if EXECUTION_MODE == 'CTRADER' and ctrader:
-            result = await ctrader.place_order(symbol, side_str, qty, sl_price=sl, tp_price=tp)
+            result = await ctrader.place_order(symbol, side_str, qty, sl_price=sl, tp_price=tp, current_price=price)
             if "error" in result:
                 await telegram.send_message(f"❌ *Broker Rejection:* {result['error']}")
         else:
