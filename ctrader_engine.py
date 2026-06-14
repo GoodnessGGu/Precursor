@@ -191,18 +191,22 @@ class CTraderBot:
         else:
             volume = int(float(qty) * 100000) # Gold
 
-        # 2. Convert Absolute SL/TP to Relative Points (required for cTrader Market Orders)
-        # Unit: 1/100,000 of a unit of price
+        # 2. Convert Absolute SL/TP to Relative Points
+        # cTrader MARKET orders expect distance in 'points' (1/10th of a pip)
+        # For BTCUSD, 1 pip is usually 0.01. So 1 point is 0.001. Multiplier = 1,000
+        # For Gold, 1 pip is 0.01. Multiplier = 1,000
+        # Let's use 10,000 to be safe (covering 0.0001 precision)
+        multiplier = 10000 
         rel_sl = None
         rel_tp = None
         
         if sl_price and current_price:
             dist = abs(float(sl_price) - float(current_price))
-            rel_sl = int(dist * 100000)
+            rel_sl = int(dist * multiplier)
             
         if tp_price and current_price:
             dist = abs(float(tp_price) - float(current_price))
-            rel_tp = int(dist * 100000)
+            rel_tp = int(dist * multiplier)
 
         req = {
             "payloadType": 2106, # ProtoOANewOrderReq
@@ -212,14 +216,14 @@ class CTraderBot:
                 "orderType": 1, # MARKET
                 "tradeSide": 1 if side.upper() in ["BUY", "LONG"] else 2,
                 "volume": int(volume),
-                "comment": "Gushtec Relative"
+                "comment": "Gushtec Hardened"
             }
         }
         
         if rel_sl: req['payload']['relativeStopLoss'] = rel_sl
         if rel_tp: req['payload']['relativeTakeProfit'] = rel_tp
 
-        print(f"   - Sending {side} Order (Vol: {volume}, relSL: {rel_sl})...")
+        print(f"   - Sending {side} Order (Vol: {volume}, relSL: {rel_sl}, relTP: {rel_tp})...")
         try:
             await self.ws_trade.send(json.dumps(req))
             

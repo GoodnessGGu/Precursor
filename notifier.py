@@ -16,14 +16,11 @@ class TelegramNotifier:
     async def send_message(self, text, reply_markup=None):
         if self.bot and self.chat_id:
             try:
-                await self.bot.send_message(chat_id=self.chat_id, text=text, parse_mode='Markdown', reply_markup=reply_markup)
+                await self.bot.send_message(chat_id=self.chat_id, text=text, parse_mode='HTML', reply_markup=reply_markup)
             except Exception as e:
                 print(f"Telegram Error: {e}")
 
     async def notify_entry(self, signal):
-        # Escape underscores for Telegram Markdown
-        clean_symbol = signal['symbol'].replace('_', '\\_')
-        
         # Create Inline Buttons for the trade alert
         keyboard = [
             [
@@ -35,15 +32,15 @@ class TelegramNotifier:
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         msg = (
-            f"🚀 *BTC TRADE EXECUTED*\n"
+            f"🚀 <b>BTC TRADE EXECUTED</b>\n"
             f"━━━━━━━━━━━━━━━\n"
-            f"🔹 *Asset:* {clean_symbol}\n"
-            f"🔹 *Action:* {signal['action'].upper()}\n"
-            f"🔹 *Price:* {signal['price']:.2f}\n"
-            f"🛑 *SL:* {signal['sl']:.2f}\n"
-            f"🎯 *TP:* {signal['tp']:.2f}\n"
+            f"🔹 <b>Asset:</b> {signal['symbol']}\n"
+            f"🔹 <b>Action:</b> {signal['action'].upper()}\n"
+            f"🔹 <b>Price:</b> {signal['price']:.2f}\n"
+            f"🛑 <b>SL:</b> {signal['sl']:.2f}\n"
+            f"🎯 <b>TP:</b> {signal['tp']:.2f}\n"
             f"━━━━━━━━━━━━━━━\n"
-            f"🤖 _Use buttons below to control the trade._"
+            f"🤖 <i>Use buttons below to control the trade.</i>"
         )
         await self.send_message(msg, reply_markup=reply_markup)
 
