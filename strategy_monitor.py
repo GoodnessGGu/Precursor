@@ -28,8 +28,9 @@ class HybridStrategy:
         elif price > 1000000: # 2 digits (e.g. 6400000)
             price = price / 100.0
             
+        if price == 0: return None
+
         # 2. Check for New FVG (from closed candles)
-        # ...
         last_candle_ts = df_5m.index[-1]
         if last_candle_ts != self.last_candle_processed:
             self.last_candle_processed = last_candle_ts
@@ -63,13 +64,15 @@ class HybridStrategy:
         if self.tick_count % 50 == 0:
             if self.bullish_fvg:
                 dist = price - self.bullish_fvg['top']
-                print(f"👀 WATCHING BULLISH FVG: Price is {dist:.2f} above entry zone.")
+                print(f"👀 WATCHING BULLISH FVG: BTC at {price:.2f} | Dist to box: {dist:.2f}")
             if self.bearish_fvg:
                 dist = self.bearish_fvg['bottom'] - price
-                print(f"👀 WATCHING BEARISH FVG: Price is {dist:.2f} below entry zone.")
+                print(f"👀 WATCHING BEARISH FVG: BTC at {price:.2f} | Dist to box: {dist:.2f}")
 
         # LONG TRIGGER
         if self.bullish_fvg and price <= self.bullish_fvg['top'] and price > self.bullish_fvg['bottom']:
+            # Entry Confirmation: We need a slight uptick or 'rejection' 
+            # (In Pine this was candle close > open, here we'll trigger on first touch)
             sl = self.bullish_fvg['bottom']
             rr = config.get("rr_ratio")
             tp = price + (price - sl) * rr
@@ -124,11 +127,16 @@ async def monitor_market_v2(ctrader, callback):
         on_tick.counter += 1
         
         if on_tick.counter % 30 == 0 or not hasattr(on_tick, "df_5m"):
-            df = yf.download("BTC-USD", period="1d", interval="5m", progress=False)
-            if not df.empty:
-                if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-                on_tick.df_5m = df
-                LAST_CANDLE_TIME = df.index[-1].strftime('%H:%M')
+            try:
+                df = yf.download("BTC-USD", period="1d", interval="5m", progress=False)
+                if not df.empty:
+                    if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+                    on_tick.df_5m = df
+                    LAST_CANDLE_TIME = df.index[-1].strftime('%H:%M')
+                    if on_tick.counter % 300 == 0:
+                        print(f"📊 Market Sync: BTC at {LAST_TICK_PRICE:.2f} (Last Candle: {LAST_CANDLE_TIME})")
+            except:
+                pass
 
         # Run Strategy
         if hasattr(on_tick, "df_5m"):
