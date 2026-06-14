@@ -191,17 +191,13 @@ class CTraderBot:
         return None
 
     async def place_order(self, symbol, side, qty, sl_price=None, tp_price=None, retry=True):
-        """Places a Market Order with speed-calibration and timeout protection"""
+        """Places a Market Order with hardened speed-calibration and 15s timeout protection"""
         
-        # 1. Force fresh handshake for guaranteed execution if needed
         if not self.is_ws_open(self.ws_trade):
             success = await self.connect_trade()
             if not success: return {"error": "Handshake Failed"}
 
         symbol_id = 101 if "BTC" in symbol.upper() else 41
-        
-        # 2. Calibrated Volume
-        # For BTCUSD, volume 1 = 0.01 units. This is the minimum.
         if "BTC" in symbol.upper():
             volume = int(float(qty) * 100) # 0.01 -> 1
         else:
@@ -223,41 +219,38 @@ class CTraderBot:
 
         print(f"   - Sending {side} Order (Vol: {volume})...")
         try:
-            # Send the request
             await self.ws_trade.send(json.dumps(req))
             
-            # 3. Aggressive Response Watchdog (Read with timeout)
-            # If no execution event in 5s, it's a dead link
-            try:
-                # We use wait_for to prevent infinite hanging
-                res = await asyncio.wait_for(self.ws_trade.recv(), timeout=5.0)
-                data = json.loads(res)
-                
-                # Check for confirmation
-                if data.get('payloadType') == 2126: # Execution Event
-                    payload = data.get('payload', {})
-                    etype = payload.get('executionType')
-                    if etype == 3: # REJECTED
-                        return {"error": f"Broker Rejected: {payload.get('errorCode')}"}
-                    return {"status": "success", "data": payload}
-                
-                # If we got something else, try one more recv
-                res = await asyncio.wait_for(self.ws_trade.recv(), timeout=2.0)
-                data = json.loads(res)
-                if data.get('payloadType') == 2126:
-                    return {"status": "success", "data": data.get('payload')}
+            # Start timer for confirmation
+            start_time = time.time()
+            while time.time() - start_time < 15: # 15 second total patience
+                try:
+                    res = await asyncio.wait_for(self.ws_trade.recv(), timeout=2.0)
+                    data = json.loads(res)
+                    pt = data.get('payloadType')
+                    
+                    if pt == 2126: # Execution Event
+                        payload = data.get('payload', {})
+                        etype = payload.get('executionType')
+                        if etype == 3: # REJECTED
+                            return {"error": f"Broker Rejected: {payload.get('errorCode')}"}
+                        print(f"✅ Order Confirmed: {etype}")
+                        return {"status": "success", "data": payload}
+                    
+                    if pt == 2142: # Error
+                        return {"error": f"cTrader Error: {data.get('payload', {}).get('description')}"}
+                except asyncio.TimeoutError:
+                    continue # Keep waiting until 15s total
 
-            except asyncio.TimeoutError:
-                if retry:
-                    print("⚠️ Response timeout, performing hard reset and retrying...")
-                    self.ws_trade = None
-                    return await self.place_order(symbol, side, qty, sl_price, tp_price, retry=False)
-                return {"error": "Execution Confirmation Timeout"}
+            if retry:
+                print("⚠️ Confirmation Timeout, resetting connection and retrying...")
+                self.ws_trade = None
+                return await self.place_order(symbol, side, qty, sl_price, tp_price, retry=False)
+            
+            return {"error": "Execution Confirmation Timeout"}
 
         except Exception as e:
             if retry:
                 self.ws_trade = None
                 return await self.place_order(symbol, side, qty, sl_price, tp_price, retry=False)
             return {"error": f"Execution Error: {e}"}
-            
-        return {"error": "Order Flow Interrupted"}
