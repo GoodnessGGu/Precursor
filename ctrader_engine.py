@@ -35,10 +35,11 @@ class CTraderBot:
                 try: await self.ws_trade.close()
                 except: pass
             
-            # Using shorter ping timeouts to detect dead links faster
             self.ws_trade = await websockets.connect(self.uri, ping_interval=10, ping_timeout=10)
             success = await self._authenticate(self.ws_trade)
             if success:
+                # CRITICAL: Tiny delay to let broker process the auth
+                await asyncio.sleep(0.5)
                 asyncio.create_task(self.heartbeat(self.ws_trade))
             return success
         except Exception as e:
@@ -52,6 +53,7 @@ class CTraderBot:
             self.ws_price = await websockets.connect(self.uri, ping_interval=10, ping_timeout=10)
             success = await self._authenticate(self.ws_price)
             if success:
+                await asyncio.sleep(0.5)
                 asyncio.create_task(self.heartbeat(self.ws_price))
             return success
         except Exception as e:
@@ -61,16 +63,13 @@ class CTraderBot:
     async def _authenticate(self, ws):
         try:
             # 1. App Auth
-            print("   - Sending App Auth...")
             await ws.send(json.dumps({
                 "payloadType": 2100,
                 "payload": {"clientId": self.client_id, "clientSecret": self.secret}
             }))
             await ws.recv()
-            print("   - App Auth OK.")
             
             # 2. Account Auth
-            print(f"   - Sending Account Auth for {self.account_id}...")
             await ws.send(json.dumps({
                 "payloadType": 2102,
                 "payload": {"ctidTraderAccountId": int(self.account_id), "accessToken": self.access_token}
@@ -78,12 +77,9 @@ class CTraderBot:
             res = await ws.recv()
             data = json.loads(res)
             if data.get('payloadType') == 2103:
-                print("   - Account Auth OK.")
                 return True
-            else:
-                print(f"   - Account Auth FAILED: {res}")
         except Exception as e:
-            print(f"   - Auth Exception: {e}")
+            print(f"Auth Error: {e}")
         return False
 
     async def heartbeat(self, ws):
@@ -128,7 +124,6 @@ class CTraderBot:
             return json.loads(res).get('payload', {}).get('position', [])
         except Exception as e:
             print(f"Get Positions Error: {e}")
-            # Try to reconnect for next call
             self.ws_trade = None
             return []
 
@@ -144,7 +139,6 @@ class CTraderBot:
                 "payload": {"ctidTraderAccountId": int(self.account_id), "symbolId": [symbol_id]}
             }))
             
-            print(f"📡 Price Feed Live for {symbol_name} (ID: {symbol_id})")
             async for message in self.ws_price:
                 data = json.loads(message)
                 if data.get('payloadType') == 2131: # Spot Event
@@ -161,23 +155,19 @@ class CTraderBot:
         return None
 
     async def place_order(self, symbol, side, qty, sl_price=None, tp_price=None, retry=True):
-        """Places a Market Order with dynamic retry logic and error decoding"""
+        """Places a Market Order with speed-calibration and timeout protection"""
         
-        # 1. Ensure connection is alive
+        # 1. Force fresh handshake for guaranteed execution if needed
         if not self.is_ws_open(self.ws_trade):
-            print("   - Trade WS closed/missing, performing fresh handshake...")
             success = await self.connect_trade()
-            if not success: return {"error": "Handshake Failed before order"}
+            if not success: return {"error": "Handshake Failed"}
 
         symbol_id = 101 if "BTC" in symbol.upper() else 41
         
-        # 2. Dynamic Volume Calculation
-        # cTrader 'volume' is units. 
-        # For BTC: 100 units = 1.00 lot in Deriv cTrader? 
-        # Actually in cTrader 1 unit = 0.01 lot usually.
-        # Let's try Volume = 100 for 0.01 BTC (1 unit) to be safe.
+        # 2. Calibrated Volume
+        # For BTCUSD, volume 1 = 0.01 units. This is the minimum.
         if "BTC" in symbol.upper():
-            volume = int(float(qty) * 10000) # 0.01 -> 100 units
+            volume = int(float(qty) * 100) # 0.01 -> 1
         else:
             volume = int(float(qty) * 100000) # 0.01 -> 1000 units (Gold)
 
@@ -189,42 +179,49 @@ class CTraderBot:
                 "orderType": 1,
                 "tradeSide": 1 if side.upper() in ["BUY", "LONG"] else 2,
                 "volume": volume,
-                "comment": "Gushtec Immortal"
+                "comment": "Gushtec Optimized"
             }
         }
         if sl_price: req['payload']['stopLoss'] = float(sl_price)
         if tp_price: req['payload']['takeProfit'] = float(tp_price)
 
-        print(f"   - Sending Order: {side} {qty} {symbol} (Vol: {volume})...")
+        print(f"   - Sending {side} Order (Vol: {volume})...")
         try:
+            # Send the request
             await self.ws_trade.send(json.dumps(req))
             
-            # 3. Read loop with specific error decoding
-            for _ in range(10): # Listen up to 10 messages
-                res = await self.ws_trade.recv()
+            # 3. Aggressive Response Watchdog (Read with timeout)
+            # If no execution event in 5s, it's a dead link
+            try:
+                # We use wait_for to prevent infinite hanging
+                res = await asyncio.wait_for(self.ws_trade.recv(), timeout=5.0)
                 data = json.loads(res)
-                pt = data.get('payloadType')
                 
-                if pt == 2126: # Execution Event
+                # Check for confirmation
+                if data.get('payloadType') == 2126: # Execution Event
                     payload = data.get('payload', {})
                     etype = payload.get('executionType')
                     if etype == 3: # REJECTED
-                        err_code = payload.get('errorCode', 'UNKNOWN')
-                        print(f"   - cTrader REJECTION: {err_code}")
-                        return {"error": f"Broker Rejected: {err_code}"}
-                    if etype in [1, 2]:
-                        return {"status": "success", "data": payload}
+                        return {"error": f"Broker Rejected: {payload.get('errorCode')}"}
+                    return {"status": "success", "data": payload}
                 
-                if pt == 2142: # Error Res
-                    err_msg = data.get('payload', {}).get('description', 'Unknown Error')
-                    print(f"   - cTrader PROTOCOL ERROR: {err_msg}")
-                    return {"error": f"Protocol Error: {err_msg}"}
+                # If we got something else, try one more recv
+                res = await asyncio.wait_for(self.ws_trade.recv(), timeout=2.0)
+                data = json.loads(res)
+                if data.get('payloadType') == 2126:
+                    return {"status": "success", "data": data.get('payload')}
+
+            except asyncio.TimeoutError:
+                if retry:
+                    print("⚠️ Response timeout, performing hard reset and retrying...")
+                    self.ws_trade = None
+                    return await self.place_order(symbol, side, qty, sl_price, tp_price, retry=False)
+                return {"error": "Execution Confirmation Timeout"}
 
         except Exception as e:
             if retry:
-                print(f"⚠️ Trade link dropped ({e}), retrying once...")
                 self.ws_trade = None
                 return await self.place_order(symbol, side, qty, sl_price, tp_price, retry=False)
-            return {"error": f"Critical Execution Error: {e}"}
+            return {"error": f"Execution Error: {e}"}
             
-        return {"error": "Timeout waiting for confirmation"}
+        return {"error": "Order Flow Interrupted"}
