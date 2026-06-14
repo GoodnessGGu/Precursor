@@ -135,7 +135,8 @@ async def monitor_market_v2(ctrader, callback):
             signal = strat.update_with_tick(bid, ask, on_tick.df_5m)
             if signal:
                 print(f"🎯 LIVE TICK SIGNAL: {signal['action'].upper()} @ {signal['price']}")
-                await callback(signal)
+                # CRITICAL: Run callback in background so it doesn't block the tick loop
+                asyncio.create_task(callback(signal))
 
     # Start the continuous WebSocket subscription
     while True:
