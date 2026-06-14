@@ -34,6 +34,7 @@ async def list_accounts():
         data = json.loads(res)
         
         if data.get('payloadType') == 2150: # ProtoOAGetAccountListByAccessTokenRes
+            print(f"RAW PAYLOAD: {json.dumps(data.get('payload'), indent=2)}")
             accounts = data.get('payload', {}).get('ctidTraderAccount', [])
             print("\n--- FOUND ACCOUNTS ---")
             for acc in accounts:

@@ -21,6 +21,9 @@ class TelegramNotifier:
                 print(f"Telegram Error: {e}")
 
     async def notify_entry(self, signal):
+        # Escape underscores for Telegram Markdown
+        clean_symbol = signal['symbol'].replace('_', '\\_')
+        
         # Create Inline Buttons for the trade alert
         keyboard = [
             [
@@ -34,7 +37,7 @@ class TelegramNotifier:
         msg = (
             f"🚀 *BTC TRADE EXECUTED*\n"
             f"━━━━━━━━━━━━━━━\n"
-            f"🔹 *Asset:* {signal['symbol']}\n"
+            f"🔹 *Asset:* {clean_symbol}\n"
             f"🔹 *Action:* {signal['action'].upper()}\n"
             f"🔹 *Price:* {signal['price']:.2f}\n"
             f"🛑 *SL:* {signal['sl']:.2f}\n"

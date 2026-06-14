@@ -217,8 +217,8 @@ class CTraderBot:
                 "comment": "Gushtec DeepDiscovery"
             }
         }
-        if sl_price: req['payload']['stopLoss'] = float(sl_price)
-        if tp_price: req['payload']['takeProfit'] = float(tp_price)
+        if sl_price: req['payload']['stopLoss'] = round(float(sl_price), 2)
+        if tp_price: req['payload']['takeProfit'] = round(float(tp_price), 2)
 
         print(f"   - Sending {side} Order (Vol: {volume})...")
         try:
