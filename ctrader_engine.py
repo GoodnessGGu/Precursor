@@ -234,6 +234,8 @@ class CTraderBot:
                     data = json.loads(res)
                     pt = data.get('payloadType')
                     
+                    print(f"   - [TRACE] Received Type {pt}")
+                    
                     if pt == 2126: # Execution Event
                         payload = data.get('payload', {})
                         etype = payload.get('executionType')

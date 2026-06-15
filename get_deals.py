@@ -21,34 +21,43 @@ async def get_deals():
         await ws.send(json.dumps({"payloadType": 2102, "payload": {"ctidTraderAccountId": int(account_id), "accessToken": access_token}}))
         await ws.recv()
         
-        # Request deals for last 24h
-        from_date = int((datetime.now() - timedelta(days=1)).timestamp() * 1000)
-        to_date = int(datetime.now().timestamp() * 1000)
+        # Pull last 24h
+        from_ts = int((datetime.now() - timedelta(days=1)).timestamp() * 1000)
+        to_ts = int(datetime.now().timestamp() * 1000)
         
-        print("Fetching deals for the last hour...")
-        await ws.send(json.dumps({
-            "payloadType": 2137, # ProtoOADealListReq
-            "payload": {
-                "ctidTraderAccountId": int(account_id),
-                "fromTimestamp": from_date,
-                "toTimestamp": to_date,
-                "symbolId": 41, # GOLD
-                "period": 1 # M1
-            }
-        }))
+        # We must request deals symbol by symbol
+        symbols = {"BTCUSD": 101, "GOLD": 41}
         
-        res = await ws.recv()
-        data = json.loads(res)
+        print(f"\n--- CTRADER DEAL HISTORY (Last 24h) ---")
         
-        if data.get('payloadType') == 2138:
-            deals = data.get('payload', {}).get('deal', [])
-            print(f"\n--- RECENT DEALS ({len(deals)}) ---")
-            for d in deals:
-                pnl = d.get('netProfit', 0) / 100.0
-                print(f"ID: {d.get('dealId')} | Symbol: {d.get('symbolId')} | PnL: ${pnl:.2f}")
-            print("--------------------\n")
-        else:
-            print(f"Error: {data}")
+        for name, sid in symbols.items():
+            try:
+                await ws.send(json.dumps({
+                    "payloadType": 2137,
+                    "payload": {
+                        "ctidTraderAccountId": int(account_id),
+                        "fromTimestamp": from_ts,
+                        "toTimestamp": to_ts,
+                        "symbolId": sid,
+                        "period": 1 # M1
+                    }
+                }))
+                
+                res = await ws.recv()
+                data = json.loads(res)
+                
+                if data.get('payloadType') == 2138:
+                    deals = data.get('payload', {}).get('deal', [])
+                    print(f"\nAsset: {name} ({len(deals)} deals)")
+                    for d in deals:
+                        pnl = d.get('netProfit', 0) / 100.0
+                        side = "BUY" if d.get('tradeSide') == 1 else "SELL"
+                        dt = datetime.fromtimestamp(d.get('executionTimestamp')/1000)
+                        print(f" • ID: {d.get('dealId')} | {side} | PnL: ${pnl:,.2f} | {dt.strftime('%H:%M')} UTC")
+                else:
+                    print(f"Error for {name}: {data.get('payload', {}).get('description')}")
+            except Exception as e:
+                print(f"Fetch failed for {name}: {e}")
 
 if __name__ == "__main__":
     asyncio.run(get_deals())
