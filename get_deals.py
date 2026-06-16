@@ -22,8 +22,8 @@ async def get_deals():
         await ws.recv()
         
         # Pull last 24h
-        from_ts = int((datetime.now() - timedelta(days=1)).timestamp() * 1000)
-        to_ts = int(datetime.now().timestamp() * 1000)
+        from_ts = int((datetime.now() - timedelta(days=2)).timestamp() * 1000)
+        to_ts = int((datetime.now() + timedelta(days=7)).timestamp() * 1000)
         
         # We must request deals symbol by symbol
         symbols = {"BTCUSD": 101, "GOLD": 41}

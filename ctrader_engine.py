@@ -183,33 +183,39 @@ class CTraderBot:
             success = await self.connect_trade()
             if not success: return {"error": "Handshake Failed"}
 
-        symbol_id = 101 if "BTC" in symbol.upper() else 41
+        # 1. Fetch Specs for Dynamic Stop Level Correction
+        specs = await self.get_symbol_specs(symbol)
+        stop_level_points = 0
+        if specs:
+            # stopLevel is in 1/100,000 units usually
+            stop_level_points = specs.get('stopLevel', 0)
         
-        # 1. Volume Calibration
+        # 2. Volume Calibration
         if "BTC" in symbol.upper():
             volume = int(float(qty) * 100) # 0.01 -> 1
         else:
             volume = int(float(qty) * 100000) # Gold
 
-        # 2. Convert Absolute SL/TP to Relative Points
-        # cTrader MARKET orders expect distance in 1/100,000 of a unit of price.
-        # This is constant for ALL symbols in OpenAPI 2.0.
+        # 3. Convert Absolute SL/TP to Relative Points
         multiplier = 100000 
         rel_sl = None
         rel_tp = None
         
         if sl_price and current_price:
-            # Round distance to 2 decimal places to match symbol precision
             dist = round(abs(float(sl_price) - float(current_price)), 2)
-            # Ensure a minimum safety distance (e.g. at least 500 points = $5.00 for BTC)
-            # GRID ROUNDING: Use multiplier and ensure it's a multiple of 1000 (1 cent)
-            raw_points = int(max(dist, 5.0) * multiplier)
-            rel_sl = (raw_points // 1000) * 1000
+            # Ensure a minimum safety distance (at least $25.00 for BTC or broker's stopLevel)
+            min_dist_points = 2500000 if "BTC" in symbol.upper() else 100000
+            
+            raw_points = int(dist * multiplier)
+            rel_sl = max(raw_points, min_dist_points, stop_level_points)
+            # Ensure multiple of 1000 for precision
+            rel_sl = (rel_sl // 1000) * 1000
             
         if tp_price and current_price:
             dist = round(abs(float(tp_price) - float(current_price)), 2)
             raw_points = int(dist * multiplier)
-            rel_tp = (raw_points // 1000) * 1000
+            rel_tp = max(raw_points, stop_level_points)
+            rel_tp = (rel_tp // 1000) * 1000
 
         req = {
             "payloadType": 2106, # ProtoOANewOrderReq
@@ -219,7 +225,7 @@ class CTraderBot:
                 "orderType": 1, # MARKET
                 "tradeSide": 1 if side.upper() in ["BUY", "LONG"] else 2,
                 "volume": int(volume),
-                "comment": "Gushtec Final"
+                "comment": "Gushtec BrokerAware"
             }
         }
         
