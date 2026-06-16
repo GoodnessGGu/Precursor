@@ -202,11 +202,14 @@ class CTraderBot:
             # Round distance to 2 decimal places to match symbol precision
             dist = round(abs(float(sl_price) - float(current_price)), 2)
             # Ensure a minimum safety distance (e.g. at least 500 points = $5.00 for BTC)
-            rel_sl = int(max(dist, 5.0) * multiplier)
+            # GRID ROUNDING: Use multiplier and ensure it's a multiple of 1000 (1 cent)
+            raw_points = int(max(dist, 5.0) * multiplier)
+            rel_sl = (raw_points // 1000) * 1000
             
         if tp_price and current_price:
             dist = round(abs(float(tp_price) - float(current_price)), 2)
-            rel_tp = int(dist * multiplier)
+            raw_points = int(dist * multiplier)
+            rel_tp = (raw_points // 1000) * 1000
 
         req = {
             "payloadType": 2106, # ProtoOANewOrderReq
