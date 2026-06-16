@@ -199,12 +199,13 @@ class CTraderBot:
         rel_tp = None
         
         if sl_price and current_price:
-            dist = abs(float(sl_price) - float(current_price))
+            # Round distance to 2 decimal places to match symbol precision
+            dist = round(abs(float(sl_price) - float(current_price)), 2)
             # Ensure a minimum safety distance (e.g. at least 500 points = $5.00 for BTC)
-            rel_sl = max(int(dist * multiplier), 50000)
+            rel_sl = int(max(dist, 5.0) * multiplier)
             
         if tp_price and current_price:
-            dist = abs(float(tp_price) - float(current_price))
+            dist = round(abs(float(tp_price) - float(current_price)), 2)
             rel_tp = int(dist * multiplier)
 
         req = {
@@ -240,12 +241,17 @@ class CTraderBot:
                         payload = data.get('payload', {})
                         etype = payload.get('executionType')
                         if etype == 3: # REJECTED
-                            return {"error": f"Broker Rejected: {payload.get('errorCode')}"}
+                            err_code = payload.get('errorCode', 'UNKNOWN')
+                            print(f"   - [TRACE] Broker Rejection: {err_code}")
+                            return {"error": f"Broker Rejected: {err_code}"}
                         return {"status": "success", "data": payload}
                     
                     if pt == 2132: # Order Error
                         payload = data.get('payload', {})
-                        return {"error": f"Broker Error: {payload.get('errorCode')} - {payload.get('description')}"}
+                        err_code = payload.get('errorCode', 'UNKNOWN')
+                        err_desc = payload.get('description', 'No description')
+                        print(f"   - [TRACE] Order Error: {err_code} - {err_desc}")
+                        return {"error": f"Broker Error: {err_code} - {err_desc}"}
 
                 except asyncio.TimeoutError:
                     continue 
