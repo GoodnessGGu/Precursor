@@ -134,10 +134,44 @@ async def process_trade(signal_data):
         print(f"❌ AI BLOCKED - Trade rejected due to low probability.")
 
 @app.post("/webhook")
-async def webhook(request: Request, background_tasks: BackgroundTasks):
-    payload = await request.json()
-    background_tasks.add_task(process_trade, payload)
-    return {"status": "received"}
+async def tradingview_webhook(request: Request, background_tasks: BackgroundTasks):
+    """
+    Receives JSON from TradingView Alerts
+    Example: {"action": "long", "symbol": "BTCUSD", "price": "{{close}}", "sl": "{{plot_0}}", "tp": "{{plot_1}}", "secret": "GUSHTEC_2026"}
+    """
+    try:
+        data = await request.json()
+        print(f"📩 WEBHOOK RECEIVED: {data}")
+        
+        # Security: Simple Secret check
+        if data.get("secret") != "GUSHTEC_2026":
+            print("❌ Unauthorized Webhook Attempt")
+            return {"status": "error", "message": "Unauthorized"}
+
+        # Extract data
+        action = data.get("action", "").lower()
+        if action not in ["long", "short", "buy", "sell"]:
+            return {"status": "ignored", "message": "Invalid action"}
+
+        # Normalize side
+        side = "buy" if action in ["long", "buy"] else "sell"
+        
+        signal = {
+            "action": side,
+            "symbol": data.get("symbol", "BTCUSD"),
+            "price": float(data.get("price", 0)),
+            "sl": float(data.get("sl", 0)),
+            "tp": float(data.get("tp", 0)),
+            "source": "TradingView"
+        }
+
+        # Queue Trade Execution
+        background_tasks.add_task(process_trade, signal)
+        return {"status": "success", "message": f"TradingView {side.upper()} queued"}
+
+    except Exception as e:
+        print(f"Webhook Parse Error: {e}")
+        return {"status": "error", "message": str(e)}
 
 @app.get("/")
 def health():
