@@ -183,6 +183,9 @@ class CTraderBot:
             success = await self.connect_trade()
             if not success: return {"error": "Handshake Failed"}
 
+        # Fix symbol_id mapping
+        symbol_id = 101 if "BTC" in symbol.upper() else 41
+        
         # 1. Fetch Specs for Dynamic Stop Level Correction
         specs = await self.get_symbol_specs(symbol)
         stop_level_points = 0
